@@ -708,6 +708,178 @@ class WanVideoSetLoRAs:
 
         return (patcher,)
 
+def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device, block_swap_args=None):
+    print("block_swap_args", block_swap_args)
+    params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv"}       
+    
+    log.info("Using accelerate to load and assign model weights to device...")
+    param_count = sum(1 for _ in transformer.named_parameters())
+    pbar = ProgressBar(param_count)
+    cnt = 0
+    for name, param in tqdm(transformer.named_parameters(),
+            desc=f"Loading transformer parameters to {transformer_load_device}", 
+            total=param_count,
+            leave=True):
+        block_idx = vace_block_idx = None
+        if "vace_blocks." in name:
+            try:
+                vace_block_idx = int(name.split("vace_blocks.")[1].split(".")[0])
+            except Exception:
+                vace_block_idx = None
+        elif "blocks." in name:
+            try:
+                block_idx = int(name.split("blocks.")[1].split(".")[0])
+            except Exception:
+                block_idx = None
+        print("block_idx:", block_idx)
+        print("vace_block_idx:", vace_block_idx)
+        if "loras" in name:
+            continue
+        dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
+        dtype_to_use = weight_dtype if sd[name].dtype == weight_dtype else dtype_to_use
+        if "modulation" in name or "norm" in name or "bias" in name:
+            dtype_to_use = base_dtype
+        if "patch_embedding" in name:
+            dtype_to_use = torch.float32
+
+        load_device = device
+        if block_swap_args is not None:
+            if block_idx is not None:
+                if block_idx >= len(transformer.blocks) - block_swap_args["blocks_to_swap"]:
+                    load_device = offload_device
+            elif vace_block_idx is not None:
+                if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args["vace_blocks_to_swap"]:
+                    load_device = offload_device
+
+        print("load_device:", load_device)
+
+        set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=sd[name])
+        cnt += 1
+        if cnt % 100 == 0:
+            pbar.update(100)
+    for name, param in transformer.named_parameters():
+        print(name, param.dtype, param.device, param.shape)
+    pbar.update_absolute(param_count)
+    pbar.update_absolute(0)
+
+def load_weights_gguf(transformer, reader, sd, base_dtype, transformer_load_device, patcher):
+    from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
+    import gguf
+    log.info("Using GGUF to load and assign model weights to device...")
+    param_count = sum(1 for _ in transformer.named_parameters())
+
+    sd = {}
+    for tensor in reader.tensors:
+        # if the tensor is a torch supported dtype do not use GGUFParameter
+        is_gguf_quant = tensor.tensor_type not in [gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16]
+        weights = torch.from_numpy(tensor.data.copy()).to(transformer_load_device)
+        sd[tensor.name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
+
+    patcher.model.diffusion_model = _replace_with_gguf_linear(patcher.model.diffusion_model, base_dtype, sd, patches=patcher.patches)
+    pbar = ProgressBar(param_count)
+    cnt = 0
+    for name, param in tqdm(patcher.model.diffusion_model.named_parameters(), 
+            desc=f"Loading transformer parameters to {transformer_load_device}", 
+            total=param_count,
+            leave=True):
+        if "loras" in name:
+            continue
+        #print(name, param.dtype, param.device, param.shape)
+        if isinstance(param, GGUFParameter):
+            dtype_to_use = torch.uint8
+        elif "patch_embedding" in name:
+            dtype_to_use = torch.float32
+        else:
+            dtype_to_use = base_dtype
+        set_module_tensor_to_device(patcher.model.diffusion_model, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name])
+        cnt += 1
+        if cnt % 100 == 0:
+            pbar.update(100)
+
+    #for name, param in transformer.named_parameters():
+    #    print(name, param.dtype, param.device, param.shape)
+    #patcher.load(device, full_load=True)
+    pbar.update_absolute(param_count)
+    pbar.update_absolute(0)
+
+def patch_control_lora(transformer, device):
+    log.info("Control-LoRA detected, patching model...")
+
+    in_cls = transformer.patch_embedding.__class__ # nn.Conv3d
+    old_in_dim = transformer.in_dim # 16
+    new_in_dim = 32
+    
+    new_in = in_cls(
+        new_in_dim,
+        transformer.patch_embedding.out_channels,
+        transformer.patch_embedding.kernel_size,
+        transformer.patch_embedding.stride,
+        transformer.patch_embedding.padding,
+    ).to(device=device, dtype=torch.float32)
+    
+    new_in.weight.zero_()
+    new_in.bias.zero_()
+    
+    new_in.weight[:, :old_in_dim].copy_(transformer.patch_embedding.weight)
+    new_in.bias.copy_(transformer.patch_embedding.bias)
+    
+    transformer.patch_embedding = new_in
+    transformer.expanded_patch_embedding = new_in
+
+def patch_stand_in_lora(transformer, lora_sd, transformer_load_device, base_dtype, lora_strength):
+    if "diffusion_model.blocks.0.self_attn.q_loras.down.weight" in lora_sd:                        
+        log.info("Stand-In LoRA detected")
+        for block in transformer.blocks:
+            block.self_attn.q_loras = LoRALinearLayer(transformer.dim, transformer.dim, rank=128, device=transformer_load_device, dtype=base_dtype, strength=lora_strength)
+            block.self_attn.k_loras = LoRALinearLayer(transformer.dim, transformer.dim, rank=128, device=transformer_load_device, dtype=base_dtype, strength=lora_strength)
+            block.self_attn.v_loras = LoRALinearLayer(transformer.dim, transformer.dim, rank=128, device=transformer_load_device, dtype=base_dtype, strength=lora_strength)
+            for lora in [block.self_attn.q_loras, block.self_attn.k_loras, block.self_attn.v_loras]:
+                for param in lora.parameters():
+                    param.requires_grad = False
+        for name, param in transformer.named_parameters():
+            if "lora" in name:
+                param.data.copy_(lora_sd["diffusion_model." + name].to(param.device, dtype=param.dtype))
+
+def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
+    #spacepxl's control LoRA patch
+    for l in lora:
+        log.info(f"Loading LoRA: {l['name']} with strength: {l['strength']}")
+        lora_path = l["path"]
+        lora_strength = l["strength"]
+        if isinstance(lora_strength, list):
+            if merge_loras:
+                raise ValueError("LoRA strength should be a single value when merge_loras=True")
+            transformer.lora_scheduling_enabled = True
+        if lora_strength == 0:
+            log.warning(f"LoRA {lora_path} has strength 0, skipping...")
+            continue
+        lora_sd = load_torch_file(lora_path, safe_load=True)
+        if "dwpose_embedding.0.weight" in lora_sd: #unianimate
+            from .unianimate.nodes import update_transformer
+            log.info("Unianimate LoRA detected, patching model...")
+            transformer = update_transformer(transformer, lora_sd)
+
+        lora_sd = standardize_lora_key_format(lora_sd)
+
+        if l["blocks"]:
+            lora_sd = filter_state_dict_by_blocks(lora_sd, l["blocks"], l.get("layer_filter", []))
+
+        # Filter out any LoRA keys containing 'img' if the base model state_dict has no 'img' keys
+        #if not any('img' in k for k in sd.keys()):
+        #    lora_sd = {k: v for k, v in lora_sd.items() if 'img' not in k}
+        control_lora=False
+        if "diffusion_model.patch_embedding.lora_A.weight" in lora_sd:
+            control_lora = True
+        #stand-in LoRA patch
+        if "diffusion_model.blocks.0.self_attn.q_loras.down.weight" in lora_sd:
+            patch_stand_in_lora(patcher.model.diffusion_model, lora_sd, device, base_dtype, lora_strength)
+        # normal LoRA patch
+        else:
+            patcher, _ = load_lora_for_models(patcher, None, lora_sd, lora_strength, 0)
+        
+        del lora_sd
+    return patcher, control_lora
+
 #region Model loading
 class WanVideoModelLoader:
     @classmethod
@@ -797,13 +969,16 @@ class WanVideoModelLoader:
  
 
         model_path = folder_paths.get_full_path_or_raise("diffusion_models", model)
-      
+
+        gguf_reader = None
         if not gguf:
             sd = load_torch_file(model_path, device=transformer_load_device, safe_load=True)
         else:
-            from diffusers.models.model_loading_utils import load_gguf_checkpoint
-            sd = load_gguf_checkpoint(model_path)
-        
+            #from diffusers.models.model_loading_utils import load_gguf_checkpoint
+            #sd = load_gguf_checkpoint(model_path)
+            from .gguf.gguf import load_gguf
+            sd, gguf_reader = load_gguf(model_path)
+
         if quantization == "disabled":
             for k, v in sd.items():
                 if isinstance(v, torch.Tensor):
@@ -1055,178 +1230,56 @@ class WanVideoModelLoader:
             model_type=comfy.model_base.ModelType.FLOW,
             device=device,
         )
-        scale_weights = {}
-        if not gguf:
-            if "fp8" in quantization:
-                for k, v in sd.items():
-                    if k.endswith(".scale_weight"):
-                        scale_weights[k] = v
-            if not merge_loras:
-                from .custom_linear import _replace_linear
-                transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
-                
-            if "fp8_e4m3fn" in quantization:
-                dtype = torch.float8_e4m3fn
-            elif "fp8_e5m2" in quantization:
-                dtype = torch.float8_e5m2
-            else:
-                dtype = base_dtype
-            params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv"}
-            if not lora_low_mem_load:
-                log.info("Using accelerate to load and assign model weights to device...")
-                param_count = sum(1 for _ in transformer.named_parameters())
-                pbar = ProgressBar(param_count)
-                cnt = 0
-                for name, param in tqdm(transformer.named_parameters(), 
-                        desc=f"Loading transformer parameters to {transformer_load_device}", 
-                        total=param_count,
-                        leave=True):
-                    dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else dtype
-                    dtype_to_use = dtype if sd[name].dtype == dtype else dtype_to_use
-                    if "modulation" in name or "norm" in name or "bias" in name:
-                        dtype_to_use = base_dtype
-                    if "patch_embedding" in name:
-                        dtype_to_use = torch.float32
-                    set_module_tensor_to_device(transformer, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name])
-                    cnt += 1
-                    if cnt % 100 == 0:
-                        pbar.update(100)
-
-                #for name, param in transformer.named_parameters():
-                #    print(name, param.dtype, param.device, param.shape)
-                pbar.update_absolute(param_count)
 
         comfy_model.diffusion_model = transformer
         comfy_model.load_device = transformer_load_device
-        
         patcher = comfy.model_patcher.ModelPatcher(comfy_model, device, offload_device)
         patcher.model.is_patched = False
-
-        control_lora = False        
-        if lora is not None:
-            for l in lora:
-                log.info(f"Loading LoRA: {l['name']} with strength: {l['strength']}")
-                lora_path = l["path"]
-                lora_strength = l["strength"]
-                if isinstance(lora_strength, list):
-                    if merge_loras:
-                        raise ValueError("LoRA strength should be a single value when merge_loras=True")
-                    transformer.lora_scheduling_enabled = True
-                if lora_strength == 0:
-                    log.warning(f"LoRA {lora_path} has strength 0, skipping...")
-                    continue
-                lora_sd = load_torch_file(lora_path, safe_load=True)
-                if "dwpose_embedding.0.weight" in lora_sd: #unianimate
-                    from .unianimate.nodes import update_transformer
-                    log.info("Unianimate LoRA detected, patching model...")
-                    transformer = update_transformer(transformer, lora_sd)
-
-                lora_sd = standardize_lora_key_format(lora_sd)
-
-                if l["blocks"]:
-                    lora_sd = filter_state_dict_by_blocks(lora_sd, l["blocks"], l.get("layer_filter", []))
-
-                # Filter out any LoRA keys containing 'img' if the base model state_dict has no 'img' keys
-                if not any('img' in k for k in sd.keys()):
-                    lora_sd = {k: v for k, v in lora_sd.items() if 'img' not in k}
-
-                #spacepxl's control LoRA patch
-                # for key in lora_sd.keys():
-                #     print(key)
-                
-                if "diffusion_model.patch_embedding.lora_A.weight" in lora_sd:
-                    log.info("Control-LoRA detected, patching model...")
-                    if not merge_loras:
-                        log.warning("Control-LoRA patching is only supported with merge_loras=True, setting it to True")
-                        merge_loras = True
-                    control_lora = True
-
-                    in_cls = transformer.patch_embedding.__class__ # nn.Conv3d
-                    old_in_dim = transformer.in_dim # 16
-                    new_in_dim = lora_sd["diffusion_model.patch_embedding.lora_A.weight"].shape[1]
-                    assert new_in_dim == 32
-                    
-                    new_in = in_cls(
-                        new_in_dim,
-                        transformer.patch_embedding.out_channels,
-                        transformer.patch_embedding.kernel_size,
-                        transformer.patch_embedding.stride,
-                        transformer.patch_embedding.padding,
-                    ).to(device=device, dtype=torch.float32)
-                    
-                    new_in.weight.zero_()
-                    new_in.bias.zero_()
-                    
-                    new_in.weight[:, :old_in_dim].copy_(transformer.patch_embedding.weight)
-                    new_in.bias.copy_(transformer.patch_embedding.bias)
-                    
-                    transformer.patch_embedding = new_in
-                    transformer.expanded_patch_embedding = new_in
-
-                if "diffusion_model.blocks.0.self_attn.q_loras.down.weight" in lora_sd:                        
-                    log.info("Stand-In LoRA detected")
-                    for block in transformer.blocks:
-                        block.self_attn.q_loras = LoRALinearLayer(dim, dim, rank=128, device=transformer_load_device, dtype=base_dtype, strength=lora_strength)
-                        block.self_attn.k_loras = LoRALinearLayer(dim, dim, rank=128, device=transformer_load_device, dtype=base_dtype, strength=lora_strength)
-                        block.self_attn.v_loras = LoRALinearLayer(dim, dim, rank=128, device=transformer_load_device, dtype=base_dtype, strength=lora_strength)
-                        for lora in [block.self_attn.q_loras, block.self_attn.k_loras, block.self_attn.v_loras]:
-                            for param in lora.parameters():
-                                param.requires_grad = False
-                    for name, param in transformer.named_parameters():
-                        if "lora" in name:
-                            param.data.copy_(lora_sd["diffusion_model." + name].to(param.device, dtype=param.dtype))
-                else:
-                    patcher, _ = load_lora_for_models(patcher, None, lora_sd, lora_strength, 0)
-                
-                del lora_sd
-            
-            if not gguf and merge_loras:
-                log.info("Patching LoRA to the model...")
-                patcher = apply_lora(
-                    patcher, device, transformer_load_device, 
-                    params_to_keep=params_to_keep, dtype=dtype, base_dtype=base_dtype, state_dict=sd, 
-                    low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights)
-                scale_weights.clear()
-                patcher.patches.clear()
         
-        if gguf:
-            #from diffusers.quantizers.gguf.utils import _replace_with_gguf_linear, GGUFParameter
-            from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
-            log.info("Using GGUF to load and assign model weights to device...")
-            param_count = sum(1 for _ in transformer.named_parameters())
-            
-            out_features = sd["blocks.0.self_attn.k.weight"].shape[1]
+        scale_weights = {}
+        if "fp8" in quantization:
+            for k, v in sd.items():
+                if k.endswith(".scale_weight"):
+                    scale_weights[k] = v
         
-            patcher.model.diffusion_model = _replace_with_gguf_linear(patcher.model.diffusion_model, base_dtype, sd, patches=patcher.patches)
-            pbar = ProgressBar(param_count)
-            cnt = 0
-            for name, param in tqdm(patcher.model.diffusion_model.named_parameters(), 
-                    desc=f"Loading transformer parameters to {transformer_load_device}", 
-                    total=param_count,
-                    leave=True):
-                if "loras" in name:
-                    continue
-                #print(name, param.dtype, param.device, param.shape)
-                if isinstance(param, GGUFParameter):
-                    dtype_to_use = torch.uint8
-                elif "patch_embedding" in name:
-                    dtype_to_use = torch.float32
-                else:
-                    dtype_to_use = base_dtype
-                set_module_tensor_to_device(patcher.model.diffusion_model, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name])
-                cnt += 1
-                if cnt % 100 == 0:
-                    pbar.update(100)
+        if "fp8_e4m3fn" in quantization:
+            weight_dtype = torch.float8_e4m3fn
+        elif "fp8_e5m2" in quantization:
+            weight_dtype = torch.float8_e5m2
+        else:
+            weight_dtype = base_dtype
+        
+        params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv"}
 
-            #for name, param in transformer.named_parameters():
-            #    print(name, param.dtype, param.device, param.shape)
-            #patcher.load(device, full_load=True)
-            pbar.update_absolute(param_count)
-
-        patcher.model.is_patched = True
-
+        control_lora = False
         patch_linear = (True if "scaled" in quantization or (lora is not None and not merge_loras) else False)
-        
+
+        if not merge_loras and control_lora:
+            log.warning("Control-LoRA patching is only supported with merge_loras=True")
+
+        if lora is not None:
+            patcher, control_lora = add_lora_weights(patcher, lora, base_dtype, merge_loras=merge_loras)
+      
+        if not gguf:
+            if merge_loras and not patch_linear:
+                if not lora_low_mem_load:
+                    load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
+                
+                if control_lora:
+                    patch_control_lora(patcher.model.diffusion_model, device)
+                    patcher.model.is_patched = True   
+                    
+                log.info("Merging LoRA to the model...")
+                patcher = apply_lora(
+                    patcher, device, transformer_load_device, params_to_keep=params_to_keep, dtype=weight_dtype, base_dtype=base_dtype, state_dict=sd, 
+                    low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights,)
+                if not control_lora:
+                    scale_weights.clear()
+                    patcher.patches.clear()
+            else:
+                from .custom_linear import _replace_linear
+                transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
+
         if "fast" in quantization:
             if lora is not None and not merge_loras:
                 raise NotImplementedError("fp8_fast is not supported with unmerged LoRAs")
@@ -1234,7 +1287,7 @@ class WanVideoModelLoader:
             convert_fp8_linear(transformer, base_dtype, params_to_keep, scale_weight_keys=scale_weights)
             patch_linear = False
 
-        del sd
+        #del sd
 
         if multitalk_model is not None:
             transformer.audio_proj = multitalk_model["proj_model"]
@@ -1263,18 +1316,18 @@ class WanVideoModelLoader:
                     WanRMSNorm: AutoWrappedModule,
                 },
                 module_config = dict(
-                    offload_dtype=dtype,
+                    offload_dtype=weight_dtype,
                     offload_device=offload_device,
-                    onload_dtype=dtype,
+                    onload_dtype=weight_dtype,
                     onload_device=device,
                     computation_dtype=base_dtype,
                     computation_device=device,
                 ),
                 max_num_param=params_to_keep,
                 overflow_module_config = dict(
-                    offload_dtype=dtype,
+                    offload_dtype=weight_dtype,
                     offload_device=offload_device,
-                    onload_dtype=dtype,
+                    onload_dtype=weight_dtype,
                     onload_device=offload_device,
                     computation_dtype=base_dtype,
                     computation_device=device,
@@ -1282,13 +1335,14 @@ class WanVideoModelLoader:
                 compile_args = compile_args,
             )
 
-        if load_device == "offload_device" and patcher.model.diffusion_model.device != offload_device:
+        if merge_loras:
             log.info(f"Moving diffusion model from {patcher.model.diffusion_model.device} to {offload_device}")
             patcher.model.diffusion_model.to(offload_device)
             gc.collect()
             mm.soft_empty_cache()
 
-        patcher.model["dtype"] = base_dtype
+        patcher.model["base_dtype"] = base_dtype
+        patcher.model["weight_dtype"] = weight_dtype
         patcher.model["base_path"] = model_path
         patcher.model["model_name"] = model
         patcher.model["manual_offloading"] = manual_offloading
@@ -1296,9 +1350,11 @@ class WanVideoModelLoader:
         patcher.model["auto_cpu_offload"] = True if vram_management_args is not None else False
         patcher.model["control_lora"] = control_lora
         patcher.model["compile_args"] = compile_args
-        patcher.model["gguf"] = gguf
+        patcher.model["gguf_reader"] = gguf_reader
         patcher.model["fp8_matmul"] = "fast" in quantization
         patcher.model["scale_weights"] = scale_weights
+        patcher.model["sd"] = sd
+        patcher.model["lora"] = lora
 
         if 'transformer_options' not in patcher.model_options:
             patcher.model_options['transformer_options'] = {}

@@ -1377,7 +1377,10 @@ class WanModel(torch.nn.Module):
         return block_mask
 
     def block_swap(self, blocks_to_swap, offload_txt_emb=False, offload_img_emb=False, vace_blocks_to_swap=None, prefetch_blocks=0, block_swap_debug=False):
-        log.info(f"Swapping {blocks_to_swap + 1} transformer blocks")
+        # Clamp blocks_to_swap to valid range
+        blocks_to_swap = max(0, min(blocks_to_swap, len(self.blocks)))
+        
+        log.info(f"Swapping {blocks_to_swap} transformer blocks")
         self.blocks_to_swap = blocks_to_swap
         self.prefetch_blocks = prefetch_blocks
         self.block_swap_debug = block_swap_debug
@@ -1387,11 +1390,14 @@ class WanModel(torch.nn.Module):
 
         total_offload_memory = 0
         total_main_memory = 0
+        
+        # Calculate the index where swapping starts
+        swap_start_idx = len(self.blocks) - blocks_to_swap
        
         for b, block in tqdm(enumerate(self.blocks), total=len(self.blocks), desc="Initializing block swap"):
             block_memory = get_module_memory_mb(block)
             
-            if b > self.blocks_to_swap:
+            if b < swap_start_idx:
                 block.to(self.main_device)
                 total_main_memory += block_memory
             else:
@@ -1402,12 +1408,17 @@ class WanModel(torch.nn.Module):
             vace_blocks_to_swap = 1
 
         if vace_blocks_to_swap > 0 and self.vace_layers is not None:
+            # Clamp vace_blocks_to_swap to valid range
+            vace_blocks_to_swap = max(0, min(vace_blocks_to_swap, len(self.vace_blocks)))
             self.vace_blocks_to_swap = vace_blocks_to_swap
+            
+            # Calculate the index where VACE swapping starts
+            vace_swap_start_idx = len(self.vace_blocks) - vace_blocks_to_swap
 
             for b, block in tqdm(enumerate(self.vace_blocks), total=len(self.vace_blocks), desc="Initializing vace block swap"):
                 block_memory = get_module_memory_mb(block)
                 
-                if b > self.vace_blocks_to_swap:
+                if b < vace_swap_start_idx:
                     block.to(self.main_device)
                     total_main_memory += block_memory
                 else:
@@ -1447,9 +1458,10 @@ class WanModel(torch.nn.Module):
         
         hints = []
         current_c = c
+        vace_swap_start_idx = len(self.vace_blocks) - self.vace_blocks_to_swap if self.vace_blocks_to_swap > 0 else len(self.vace_blocks)
         
         for b, block in enumerate(self.vace_blocks):
-            if b <= self.vace_blocks_to_swap and self.vace_blocks_to_swap >= 0:
+            if b >= vace_swap_start_idx and self.vace_blocks_to_swap > 0:
                 block.to(self.main_device)
                 
             if b == 0:
@@ -1462,13 +1474,13 @@ class WanModel(torch.nn.Module):
             # Store skip connection
             c_skip = block.after_proj(c_processed)
             hints.append(c_skip.to(
-                self.offload_device if self.vace_blocks_to_swap != -1 else self.main_device, 
+                self.offload_device if self.vace_blocks_to_swap > 0 else self.main_device, 
                 non_blocking=self.use_non_blocking
             ))
             
             current_c = c_processed
             
-            if b <= self.vace_blocks_to_swap and self.vace_blocks_to_swap >= 0:
+            if b >= vace_swap_start_idx and self.vace_blocks_to_swap > 0:
                 block.to(self.offload_device, non_blocking=self.use_non_blocking)
 
         return hints
@@ -1509,7 +1521,8 @@ class WanModel(torch.nn.Module):
         ref_target_masks=None,
         inner_t=None,
         standin_input=None,
-        fantasy_portrait_input=None
+        fantasy_portrait_input=None,
+        phantom_ref=None
     ):
         r"""
         Forward pass through the diffusion model
@@ -1621,6 +1634,15 @@ class WanModel(torch.nn.Module):
             seq_len += fun_ref.size(1)
             F += 1
             x = [torch.concat([_fun_ref.unsqueeze(0), u], dim=1) for _fun_ref, u in zip(fun_ref, x)]
+
+        if phantom_ref is not None:
+            phantom_ref_frames = phantom_ref.size(1)
+            phantom_ref = self.original_patch_embedding(phantom_ref.unsqueeze(0).to(torch.float32)).flatten(2).transpose(1, 2).to(x[0].dtype)
+            grid_sizes = torch.stack([torch.tensor([u[0] + phantom_ref_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
+            phantom_ref_seq_len = phantom_ref.size(1)
+            seq_len += phantom_ref_seq_len
+            F += phantom_ref_frames
+            x = [torch.concat([u, phantom_ref.unsqueeze(0)], dim=1) for phantom_ref, u in zip(phantom_ref, x)]
 
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert seq_lens.max() <= seq_len
@@ -2005,20 +2027,21 @@ class WanModel(torch.nn.Module):
             # Asynchronous block offloading with CUDA streams and events
             cuda_stream = mm.get_offload_stream(device)
             events = [torch.cuda.Event() for _ in self.blocks]
+            swap_start_idx = len(self.blocks) - self.blocks_to_swap if self.blocks_to_swap > 0 else len(self.blocks)
 
             for b, block in enumerate(self.blocks):
                 # Prefetch blocks if enabled
                 if self.prefetch_blocks > 0:
                     for prefetch_offset in range(1, self.prefetch_blocks + 1):
                         prefetch_idx = b + prefetch_offset
-                        if prefetch_idx < len(self.blocks) and self.blocks_to_swap >= 0 and prefetch_idx <= self.blocks_to_swap:
+                        if prefetch_idx < len(self.blocks) and self.blocks_to_swap > 0 and prefetch_idx >= swap_start_idx:
                             with torch.cuda.stream(cuda_stream):
                                 self.blocks[prefetch_idx].to(self.main_device, non_blocking=self.use_non_blocking)
                                 events[prefetch_idx].record(cuda_stream)
                 if self.block_swap_debug:
                     transfer_start = time.perf_counter()
                 # Wait for block to be ready
-                if b <= self.blocks_to_swap and self.blocks_to_swap >= 0:
+                if b >= swap_start_idx and self.blocks_to_swap > 0:
                     if self.prefetch_blocks > 0:
                         if not events[b].query():
                             events[b].synchronize()
@@ -2037,7 +2060,7 @@ class WanModel(torch.nn.Module):
                     compute_end = time.perf_counter()
                     compute_time = compute_end - compute_start
                     to_cpu_transfer_start = time.perf_counter()
-                if b <= self.blocks_to_swap and self.blocks_to_swap >= 0:
+                if b >= swap_start_idx and self.blocks_to_swap > 0:
                     block.to(self.offload_device, non_blocking=self.use_non_blocking)
                 if self.block_swap_debug:
                     to_cpu_transfer_end = time.perf_counter()
@@ -2050,9 +2073,6 @@ class WanModel(torch.nn.Module):
                 #controlnet
                 if (controlnet is not None) and (b % controlnet["controlnet_stride"] == 0) and (b // controlnet["controlnet_stride"] < len(controlnet["controlnet_states"])):
                     x[:, :x_len] += controlnet["controlnet_states"][b // controlnet["controlnet_stride"]].to(x) * controlnet["controlnet_weight"]
-
-                if b <= self.blocks_to_swap and self.blocks_to_swap >= 0:
-                    block.to(self.offload_device, non_blocking=self.use_non_blocking)
 
             if self.enable_teacache and (self.teacache_start_step <= current_step <= self.teacache_end_step) and pred_id is not None:
                 self.teacache_state.update(
@@ -2076,9 +2096,14 @@ class WanModel(torch.nn.Module):
                 )
                 
         if self.ref_conv is not None and fun_ref is not None:
-            full_ref_length = fun_ref.size(1)
-            x = x[:, full_ref_length:]
+            fun_ref_length = fun_ref.size(1)
+            x = x[:, fun_ref_length:]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
+        
+        if phantom_ref is not None:
+            phantom_ref_length = phantom_ref.size(1)
+            x = x[:, :-phantom_ref_length]
+            grid_sizes = torch.stack([torch.tensor([u[0] - phantom_ref_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
         if attn_cond is not None:
             x = x[:, :x_len]
