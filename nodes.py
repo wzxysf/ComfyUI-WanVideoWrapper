@@ -2479,7 +2479,7 @@ class WanVideoSampler:
                     "inner_t": [shot_len] if shot_len else None,
                     "standin_input": standin_input,
                     "fantasy_portrait_input": fantasy_portrait_input,
-                    "phantom_ref": phantom_ref
+                    "phantom_ref": phantom_ref,
                     "reverse_time": reverse_time
                 }
 
