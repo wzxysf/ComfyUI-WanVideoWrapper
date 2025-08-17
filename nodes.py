@@ -2291,29 +2291,6 @@ class WanVideoSampler:
             if bidirectional_sampling:
                 import copy
                 sample_scheduler_flipped = copy.deepcopy(sample_scheduler)
-        
-        #rope
-        freqs = None
-        transformer.rope_embedder.k = None
-        transformer.rope_embedder.num_frames = None
-        if "default" in rope_function or bidirectional_sampling:
-            d = transformer.dim // transformer.num_heads
-            freqs = torch.cat([
-                rope_params(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index),
-                rope_params(1024, 2 * (d // 6)),
-                rope_params(1024, 2 * (d // 6))
-            ],
-            dim=1)
-        elif "comfy" in rope_function:
-            transformer.rope_embedder.k = riflex_freq_index
-            transformer.rope_embedder.num_frames = latent_video_length
-           
-        transformer.rope_func = rope_function
-        for block in transformer.blocks:
-            block.rope_func = rope_function
-        if transformer.vace_layers is not None:
-            for block in transformer.vace_blocks:
-                block.rope_func = rope_function
 
         #rope
         freqs = None
