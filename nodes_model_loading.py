@@ -736,7 +736,7 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
         if "loras" in name:
             continue
         dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
-        dtype_to_use = weight_dtype if sd[name].dtype == weight_dtype else dtype_to_use
+        dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
         if "modulation" in name or "norm" in name or "bias" in name:
             dtype_to_use = base_dtype
         if "patch_embedding" in name:
@@ -753,7 +753,7 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
 
         print("load_device:", load_device)
 
-        set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=sd[name])
+        set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=sd[name.replace("_orig_mod.", "")])
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
