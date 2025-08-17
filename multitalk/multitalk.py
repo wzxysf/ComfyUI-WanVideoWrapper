@@ -256,12 +256,13 @@ class SingleStreamAttention(nn.Module):
         N_t, N_h, N_w = shape
 
         x_extra = None
-        if x.shape[0] != encoder_hidden_states.shape[0]:
+        try:
+            x = rearrange(x, "B (N_t S) C -> (B N_t) S C", N_t=N_t)
+        except:
             x_extra = x[:, -N_h * N_w:, :]
             x = x[:, :-N_h * N_w, :]
             N_t = N_t - 1
-      
-        x = rearrange(x, "B (N_t S) C -> (B N_t) S C", N_t=N_t)
+            x = rearrange(x, "B (N_t S) C -> (B N_t) S C", N_t=N_t)
 
         # get q for hidden_state
         B, N, C = x.shape
@@ -367,7 +368,7 @@ class SingleStreamMultiAttention(SingleStreamAttention):
         if human_num is None or human_num <= 1:
             return super().forward(x, encoder_hidden_states, shape)
 
-        N_t, _, _ = shape
+        N_t, N_h, N_w = shape
         x = rearrange(x, "B (N_t S) C -> (B N_t) S C", N_t=N_t)
 
         x_extra = None
