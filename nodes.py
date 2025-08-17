@@ -2158,28 +2158,6 @@ class WanVideoSampler:
             log.info(f"Number of shots in prompt: {shot_num}, Shot token lengths: {shot_len}")
 
         #region transformer settings
-        #rope
-        freqs = None
-        transformer.rope_embedder.k = None
-        transformer.rope_embedder.num_frames = None
-        if "default" in rope_function or bidirectional_sampling:
-            d = transformer.dim // transformer.num_heads
-            freqs = torch.cat([
-                rope_params(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index),
-                rope_params(1024, 2 * (d // 6)),
-                rope_params(1024, 2 * (d // 6))
-            ],
-            dim=1)
-        elif "comfy" in rope_function:
-            transformer.rope_embedder.k = riflex_freq_index
-            transformer.rope_embedder.num_frames = latent_video_length
-           
-        transformer.rope_func = rope_function
-        for block in transformer.blocks:
-            block.rope_func = rope_function
-        if transformer.vace_layers is not None:
-            for block in transformer.vace_blocks:
-                block.rope_func = rope_function
 
         #blockswap init
         
@@ -2311,6 +2289,29 @@ class WanVideoSampler:
             if bidirectional_sampling:
                 import copy
                 sample_scheduler_flipped = copy.deepcopy(sample_scheduler)
+        
+        #rope
+        freqs = None
+        transformer.rope_embedder.k = None
+        transformer.rope_embedder.num_frames = None
+        if "default" in rope_function or bidirectional_sampling:
+            d = transformer.dim // transformer.num_heads
+            freqs = torch.cat([
+                rope_params(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index),
+                rope_params(1024, 2 * (d // 6)),
+                rope_params(1024, 2 * (d // 6))
+            ],
+            dim=1)
+        elif "comfy" in rope_function:
+            transformer.rope_embedder.k = riflex_freq_index
+            transformer.rope_embedder.num_frames = latent_video_length
+           
+        transformer.rope_func = rope_function
+        for block in transformer.blocks:
+            block.rope_func = rope_function
+        if transformer.vace_layers is not None:
+            for block in transformer.vace_blocks:
+                block.rope_func = rope_function
 
         #region model pred
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None, 
@@ -3361,9 +3362,6 @@ class WanVideoSampler:
                     if model["manual_offloading"]:
                         offload_transformer(transformer)
                 raise e
-
-        #if phantom_latents is not None:
-        #    latent = latent[:,:-phantom_latents.shape[1]]
                 
         if cache_args is not None:
             cache_report(transformer, cache_args)

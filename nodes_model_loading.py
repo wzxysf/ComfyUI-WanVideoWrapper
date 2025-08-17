@@ -392,7 +392,7 @@ class WanVideoLoraSelect:
             with safe_open(lora_path, framework="pt", device="cpu") as f:
                 metadata = f.metadata()
         except Exception as e:
-            print(f"Could not load metadata from {lora}: {e}")
+            log.info(f"Could not load metadata from {lora}: {e}")
 
         if unique_id and PromptServer is not None:
             try:
@@ -419,7 +419,7 @@ class WanVideoLoraSelect:
                         unique_id
                     )
             except Exception as e:
-                print(f"Error displaying metadata: {e}")
+                log.warning(f"Error displaying metadata: {e}")
                 pass
 
         lora = {
@@ -709,8 +709,7 @@ class WanVideoSetLoRAs:
         return (patcher,)
 
 def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device, block_swap_args=None):
-    print("block_swap_args", block_swap_args)
-    params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv"}       
+    params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio_proj"}       
     
     log.info("Using accelerate to load and assign model weights to device...")
     param_count = sum(1 for _ in transformer.named_parameters())
@@ -731,8 +730,8 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
                 block_idx = int(name.split("blocks.")[1].split(".")[0])
             except Exception:
                 block_idx = None
-        print("block_idx:", block_idx)
-        print("vace_block_idx:", vace_block_idx)
+        #print("block_idx:", block_idx)
+        #print("vace_block_idx:", vace_block_idx)
         if "loras" in name:
             continue
         dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
@@ -750,15 +749,12 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
             elif vace_block_idx is not None:
                 if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args["vace_blocks_to_swap"]:
                     load_device = offload_device
-
-        print("load_device:", load_device)
-
         set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=sd[name.replace("_orig_mod.", "")])
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
-    for name, param in transformer.named_parameters():
-        print(name, param.dtype, param.device, param.shape)
+    #for name, param in transformer.named_parameters():
+    #    print(name, param.dtype, param.device, param.shape)
     pbar.update_absolute(param_count)
     pbar.update_absolute(0)
 
@@ -1207,7 +1203,7 @@ class WanVideoModelLoader:
                     )
                 block.norm_x = WanLayerNorm(dim, transformer.eps, elementwise_affine=True) if norm_input_visual else nn.Identity()
             log.info("MultiTalk model detected, patching model...")
-            
+            transformer.audio_proj = multitalk_model["proj_model"]
             sd.update(multitalk_model["sd"])
 
         
@@ -1288,9 +1284,6 @@ class WanVideoModelLoader:
             patch_linear = False
 
         #del sd
-
-        if multitalk_model is not None:
-            transformer.audio_proj = multitalk_model["proj_model"]
 
         if vram_management_args is not None:
             if gguf:
