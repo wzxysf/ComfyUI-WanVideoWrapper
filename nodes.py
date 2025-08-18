@@ -2089,6 +2089,7 @@ class WanVideoSampler:
 
         #MTV Crafter
         mtv_input = image_embeds.get("mtv_crafter_motion", None)
+        mtv_motion_tokens = None
         if mtv_input is not None:
             from .MTV.mtv import prepare_motion_embeddings
             log.info("Using MTV Crafter embeddings")
@@ -3062,7 +3063,6 @@ class WanVideoSampler:
                                 start_token_index = c[0] * 24
                                 end_token_index = (c[-1] + 1) * 24
                                 partial_mtv_motion_tokens = mtv_motion_tokens[:, start_token_index:end_token_index, :]
-                                print("mtv_motion_tokens", mtv_motion_tokens.shape)
                                 if context_options["verbose"]:
                                     log.info(f"context window: {c}")
                                     log.info(f"motion_token_indices: {start_token_index}-{end_token_index}")
