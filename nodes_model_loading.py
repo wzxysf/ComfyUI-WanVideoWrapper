@@ -508,7 +508,7 @@ class WanVideoVACEModelSelect:
         }
 
     RETURN_TYPES = ("VACEPATH",)
-    RETURN_NAMES = ("vace_model", )
+    RETURN_NAMES = ("extra_model", )
     FUNCTION = "getvacepath"
     CATEGORY = "WanVideoWrapper"
     DESCRIPTION = "VACE model to use when not using model that has it included, loaded from 'ComfyUI/models/diffusion_models'"
@@ -518,6 +518,27 @@ class WanVideoVACEModelSelect:
             "path": folder_paths.get_full_path("diffusion_models", vace_model),
         }
         return (vace_model,)
+    
+class WanVideoExtraModelSelect:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "extra_model": (folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' path to extra state dict to add to the main model"}),
+            },
+        }
+
+    RETURN_TYPES = ("VACEPATH",)
+    RETURN_NAMES = ("extra_model", )
+    FUNCTION = "getvacepath"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Extra model to load and add to the main model, ie. VACE or MTV Crafter 'ComfyUI/models/diffusion_models'"
+
+    def getvacepath(self, extra_model):
+        extra_model = {
+            "path": folder_paths.get_full_path("diffusion_models", extra_model),
+        }
+        return (extra_model,)
 
 class WanVideoLoraBlockEdit:
     def __init__(self):
@@ -883,7 +904,7 @@ class WanVideoModelLoader:
 
             "base_precision": (["fp32", "bf16", "fp16", "fp16_fast"], {"default": "bf16"}),
             "quantization": (["disabled", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e4m3fn_scaled", "fp8_e4m3fn_scaled_fast", "fp8_e5m2", "fp8_e5m2_fast", "fp8_e5m2_scaled", "fp8_e5m2_scaled_fast"], {"default": "disabled", "tooltip": "optional quantization method"}),
-            "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
+            "load_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
             "optional": {
                 "attention_mode": ([
@@ -899,7 +920,7 @@ class WanVideoModelLoader:
                 "block_swap_args": ("BLOCKSWAPARGS", ),
                 "lora": ("WANVIDLORA", {"default": None}),
                 "vram_management_args": ("VRAM_MANAGEMENTARGS", {"default": None, "tooltip": "Alternative offloading method from DiffSynth-Studio, more aggressive in reducing memory use than block swapping, but can be slower"}),
-                "vace_model": ("VACEPATH", {"default": None, "tooltip": "VACE model to use when not using model that has it included"}),
+                "extra_model": ("VACEPATH", {"default": None, "tooltip": "Extra model to add to the main model, ie. VACE or MTV Crafter"}),
                 "fantasytalking_model": ("FANTASYTALKINGMODEL", {"default": None, "tooltip": "FantasyTalking model https://github.com/Fantasy-AMAP"}),
                 "multitalk_model": ("MULTITALKMODEL", {"default": None, "tooltip": "Multitalk model"}),
                 "fantasyportrait_model": ("FANTASYPORTRAITMODEL", {"default": None, "tooltip": "FantasyPortrait model"}),
@@ -912,10 +933,11 @@ class WanVideoModelLoader:
     CATEGORY = "WanVideoWrapper"
 
     def loadmodel(self, model, base_precision, load_device,  quantization,
-                  compile_args=None, attention_mode="sdpa", block_swap_args=None, lora=None, vram_management_args=None, vace_model=None, 
+                  compile_args=None, attention_mode="sdpa", block_swap_args=None, lora=None, vram_management_args=None, extra_model=None, vace_model=None,
                   fantasytalking_model=None, multitalk_model=None, fantasyportrait_model=None):
         assert not (vram_management_args is not None and block_swap_args is not None), "Can't use both block_swap_args and vram_management_args at the same time"
-
+        if vace_model is not None:
+            extra_model = vace_model
         lora_low_mem_load = merge_loras = False
         if lora is not None:
             for l in lora:
@@ -999,14 +1021,20 @@ class WanVideoModelLoader:
         if "vace_blocks.0.after_proj.weight" in sd and not "patch_embedding.weight" in sd:
             raise ValueError("You are attempting to load a VACE module as a WanVideo model, instead you should use the vace_model input and matching T2V base model")
 
-        if vace_model is not None:
+        if extra_model is not None:
             if gguf:
-                if not vace_model["path"].endswith(".gguf"):
-                    raise ValueError("With GGUF main model the VACE module must also be a GGUF quantized, if the main model already has VACE included, you can disconnect the VACE module loader")
-                vace_sd = load_gguf_checkpoint(model_path)
+                if not extra_model["path"].endswith(".gguf"):
+                    raise ValueError("With GGUF main model the extra model must also be a GGUF quantized, if the main model already has extra included, you can disconnect the extra model loader")
+                from diffusers.models.model_loading_utils import load_gguf_checkpoint
+                extra_sd = load_gguf_checkpoint(extra_model["path"])
+                new_keys = {}
+                for k, v in extra_sd.items():
+                    if "vace" in k:
+                        new_keys[k] = v
+                extra_sd = new_keys
             else:
-                vace_sd = load_torch_file(vace_model["path"], device=transformer_load_device, safe_load=True)
-            sd.update(vace_sd)
+                extra_sd = load_torch_file(extra_model["path"], device=transformer_load_device, safe_load=True)
+            sd.update(extra_sd)
 
         first_key = next(iter(sd))
         if first_key.startswith("model.diffusion_model."):
@@ -1630,6 +1658,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoLoraBlockEdit": WanVideoLoraBlockEdit,
     "WanVideoTinyVAELoader": WanVideoTinyVAELoader,
     "WanVideoVACEModelSelect": WanVideoVACEModelSelect,
+    "WanVideoExtraModelSelect": WanVideoExtraModelSelect,
     "WanVideoLoraSelectMulti": WanVideoLoraSelectMulti,
     "WanVideoBlockSwap": WanVideoBlockSwap,
     "WanVideoVRAMManagement": WanVideoVRAMManagement,
@@ -1646,6 +1675,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoLoraBlockEdit": "WanVideo Lora Block Edit",
     "WanVideoTinyVAELoader": "WanVideo Tiny VAE Loader",
     "WanVideoVACEModelSelect": "WanVideo VACE Module Select",
+    "WanVideoExtraModelSelect": "WanVideo Extra Model Select",
     "WanVideoLoraSelectMulti": "WanVideo Lora Select Multi",
     "WanVideoBlockSwap": "WanVideo Block Swap",
     "WanVideoVRAMManagement": "WanVideo VRAM Management",
