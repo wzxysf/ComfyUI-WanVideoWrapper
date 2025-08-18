@@ -748,7 +748,7 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
                 block_idx = None
         #print("block_idx:", block_idx)
         #print("vace_block_idx:", vace_block_idx)
-        if "loras" in name:
+        if "loras" in name or "dwpose" in name or "randomref" in name:
             continue
         dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
         dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
@@ -863,7 +863,7 @@ def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
         if isinstance(lora_strength, list):
             if merge_loras:
                 raise ValueError("LoRA strength should be a single value when merge_loras=True")
-            transformer.lora_scheduling_enabled = True
+            patcher.model.diffusion_model.lora_scheduling_enabled = True
         if lora_strength == 0:
             log.warning(f"LoRA {lora_path} has strength 0, skipping...")
             continue
@@ -871,7 +871,7 @@ def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
         if "dwpose_embedding.0.weight" in lora_sd: #unianimate
             from .unianimate.nodes import update_transformer
             log.info("Unianimate LoRA detected, patching model...")
-            transformer = update_transformer(transformer, lora_sd)
+            patcher.model.diffusion_model = update_transformer(patcher.model.diffusion_model, lora_sd)
 
         lora_sd = standardize_lora_key_format(lora_sd)
 

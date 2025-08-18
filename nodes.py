@@ -1954,8 +1954,8 @@ class WanVideoSampler:
         
         # UniAnimate
         if unianimate_poses is not None:
-            transformer.dwpose_embedding.to(device, model["dtype"])
-            dwpose_data = unianimate_poses["pose"].to(device, model["dtype"])
+            transformer.dwpose_embedding.to(device, dtype)
+            dwpose_data = unianimate_poses["pose"].to(device, dtype)
             dwpose_data = torch.cat([dwpose_data[:,:,:1].repeat(1,1,3,1,1), dwpose_data], dim=2)
             dwpose_data = transformer.dwpose_embedding(dwpose_data)
             log.info(f"UniAnimate pose embed shape: {dwpose_data.shape}")
