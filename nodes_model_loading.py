@@ -1143,8 +1143,7 @@ class WanVideoModelLoader:
             "inject_sample_info": True if "fps_embedding.weight" in sd else False,
             "add_ref_conv": True if "ref_conv.weight" in sd else False,
             "in_dim_ref_conv": sd["ref_conv.weight"].shape[1] if "ref_conv.weight" in sd else None,
-            "add_control_adapter": True if "control_adapter.conv.weight" in sd else False,
-            "use_motion_attn": True if "blocks.0.motion_attn.k.weight" in sd else False
+            "add_control_adapter": True if "control_adapter.conv.weight" in sd else False
         }
 
         with init_empty_weights():
