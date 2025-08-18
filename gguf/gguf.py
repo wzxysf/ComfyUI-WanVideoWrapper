@@ -36,6 +36,7 @@ def _replace_with_gguf_linear(model, compute_dtype, state_dict, prefix="", modul
 
         if (
             isinstance(module, nn.Linear)
+            and not isinstance(module, GGUFLinear) 
             and _should_convert_to_gguf(state_dict, module_prefix)
             and name not in modules_to_not_convert
         ):
@@ -54,7 +55,6 @@ def _replace_with_gguf_linear(model, compute_dtype, state_dict, prefix="", modul
             model._modules[name].source_cls = type(module)
             # Force requires_grad to False to avoid unexpected errors
             model._modules[name].requires_grad_(False)
-
     return model
 
 def set_lora_params_gguf(module, patches, module_prefix=""):

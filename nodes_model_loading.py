@@ -755,6 +755,8 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
             pbar.update(100)
     #for name, param in transformer.named_parameters():
     #    print(name, param.dtype, param.device, param.shape)
+    #for name, param in transformer.blocks[0].motion_attn.named_parameters():
+    #    print(name, param.data)
     pbar.update_absolute(param_count)
     pbar.update_absolute(0)
 
@@ -782,12 +784,12 @@ def load_weights_gguf(transformer, reader, sd, base_dtype, transformer_load_devi
             continue
         #print(name, param.dtype, param.device, param.shape)
         if isinstance(param, GGUFParameter):
-            dtype_to_use = torch.uint8
+            continue
         elif "patch_embedding" in name:
             dtype_to_use = torch.float32
         else:
             dtype_to_use = base_dtype
-        set_module_tensor_to_device(patcher.model.diffusion_model, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name])
+        set_module_tensor_to_device(patcher.model.diffusion_model, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name.replace("_orig_mod.", "")])
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
@@ -1142,6 +1144,7 @@ class WanVideoModelLoader:
             "add_ref_conv": True if "ref_conv.weight" in sd else False,
             "in_dim_ref_conv": sd["ref_conv.weight"].shape[1] if "ref_conv.weight" in sd else None,
             "add_control_adapter": True if "control_adapter.conv.weight" in sd else False,
+            "use_motion_attn": True if "blocks.0.motion_attn.k.weight" in sd else False
         }
 
         with init_empty_weights():
