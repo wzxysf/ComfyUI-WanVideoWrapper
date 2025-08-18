@@ -28,6 +28,9 @@ from ...cache_methods.cache_methods import TeaCacheState, MagCacheState, EasyCac
 from ...multitalk.multitalk import get_attn_map_with_target
 from ...echoshot.echoshot import rope_apply_z, rope_apply_c, rope_apply_echoshot
 
+from ...MTV.mtv import apply_rotary_emb
+
+
 __all__ = ['WanModel']
 
 from comfy import model_management as mm
@@ -657,6 +660,31 @@ class WanI2VCrossAttention(WanSelfAttention):
 
         return self.o(x)
 
+class MTVCrafterMotionAttention(WanSelfAttention):
+
+    def forward(self, x, mo, pe, grid_sizes, freqs):
+        r"""
+        Args:
+            x(Tensor): Shape [B, L1, C]
+            mo: Motion tokens
+            pe: 4D RoPE
+        """
+        b, n, d = x.size(0), self.num_heads, self.head_dim
+
+        # compute query, key, value
+        q = self.norm_q(self.q(x)).view(b, -1, n, d)
+        k = self.norm_k(self.k(mo)).view(b, n, -1, d)
+        v = self.v(mo).view(b, -1, n, d)
+
+        # compute attention
+        x = attention(
+            q=rope_apply(q, grid_sizes, freqs),
+            k=apply_rotary_emb(k, pe).transpose(1, 2),
+            v=v
+        )
+
+        return self.o(x.flatten(2))
+    
 
 WAN_CROSSATTENTION_CLASSES = {
     't2v_cross_attn': WanT2VCrossAttention,
@@ -678,6 +706,7 @@ class WanAttentionBlock(nn.Module):
                  eps=1e-6,
                  attention_mode='sdpa',
                  rope_func="comfy",
+                 use_motion_attn=False
                  ):
         super().__init__()
         self.dim = out_features
@@ -694,15 +723,19 @@ class WanAttentionBlock(nn.Module):
         self.dense_attention_mode = "sageattn"
 
         self.kv_cache = None
+        self.use_motion_attn = use_motion_attn
 
         # layers
         self.norm1 = WanLayerNorm(out_features, eps)
-        self.self_attn = WanSelfAttention(in_features, out_features, num_heads, qk_norm,
-                                          eps, self.attention_mode)
+        self.self_attn = WanSelfAttention(in_features, out_features, num_heads, qk_norm, eps, self.attention_mode)
+
+        # MTV Crafter motion attn
+        if self.use_motion_attn:
+            self.norm4 = WanLayerNorm(out_features, eps, elementwise_affine=True) if cross_attn_norm else nn.Identity()
+            self.motion_attn = MTVCrafterMotionAttention(in_features, out_features, num_heads, qk_norm, eps, self.attention_mode)
+
         if cross_attn_type != "no_cross_attn":
-            self.norm3 = WanLayerNorm(
-                out_features, eps,
-                elementwise_affine=True) if cross_attn_norm else nn.Identity()
+            self.norm3 = WanLayerNorm(out_features, eps, elementwise_affine=True) if cross_attn_norm else nn.Identity()
             self.cross_attn = WAN_CROSSATTENTION_CLASSES[cross_attn_type](in_features,
                                                                           out_features,
                                                                           num_heads,
@@ -779,7 +812,11 @@ class WanAttentionBlock(nn.Module):
         freqs_ip=None,
         adapter_proj=None,
         ip_scale=1.0,
-        reverse_time=False
+        reverse_time=False,
+        mtv_motion_tokens=None,
+        mtv_motion_rotary_emb=None,
+        mtv_strength=1.0,
+        mtv_freqs=None
     ):
         r"""
         Args:
@@ -921,7 +958,8 @@ class WanAttentionBlock(nn.Module):
                 x = self.cross_attn_ffn(x, context, grid_sizes, shift_mlp, scale_mlp, gate_mlp, clip_embed, 
                                         audio_proj, audio_scale, num_latent_frames, nag_params, nag_context, is_uncond, 
                                         multitalk_audio_embedding, x_ref_attn_map, human_num, inner_t, inner_c, cross_freqs,
-                                        adapter_proj=adapter_proj, ip_scale=ip_scale)
+                                        adapter_proj=adapter_proj, ip_scale=ip_scale, 
+                                        mtv_freqs=mtv_freqs, mtv_motion_tokens=mtv_motion_tokens, mtv_motion_rotary_emb=mtv_motion_rotary_emb, mtv_strength=mtv_strength)
         else:
             if self.rope_func == "comfy_chunked":
                 y = self.ffn_chunked(x, shift_mlp, scale_mlp)
@@ -940,18 +978,23 @@ class WanAttentionBlock(nn.Module):
     def cross_attn_ffn(self, x, context, grid_sizes, shift_mlp, scale_mlp, gate_mlp, clip_embed, 
                        audio_proj, audio_scale, num_latent_frames, nag_params, 
                        nag_context, is_uncond, multitalk_audio_embedding, x_ref_attn_map, human_num, 
-                       inner_t, inner_c, cross_freqs, adapter_proj, ip_scale):
-            
-            x = x + self.cross_attn(self.norm3(x), context, grid_sizes, clip_embed=clip_embed, 
-                                    audio_proj=audio_proj, audio_scale=audio_scale, 
-                                    num_latent_frames=num_latent_frames, nag_params=nag_params, nag_context=nag_context, is_uncond=is_uncond, 
+                       inner_t, inner_c, cross_freqs, adapter_proj, ip_scale, mtv_freqs, mtv_motion_tokens, mtv_motion_rotary_emb, mtv_strength):
+
+            x = x + self.cross_attn(self.norm3(x), context, grid_sizes, clip_embed=clip_embed,
+                                    audio_proj=audio_proj, audio_scale=audio_scale,
+                                    num_latent_frames=num_latent_frames, nag_params=nag_params, nag_context=nag_context, is_uncond=is_uncond,
                                     rope_func=self.rope_func, inner_t=inner_t, inner_c=inner_c, cross_freqs=cross_freqs,
                                     adapter_proj=adapter_proj, ip_scale=ip_scale)
-            #multitalk
+            # MultiTalk
             if multitalk_audio_embedding is not None and not isinstance(self, VaceWanAttentionBlock):
                 x_audio = self.audio_cross_attn(self.norm_x(x), encoder_hidden_states=multitalk_audio_embedding,
                                             shape=grid_sizes[0], x_ref_attn_map=x_ref_attn_map, human_num=human_num)
                 x = x + x_audio * audio_scale
+
+            # MTV-Crafter Motion Attention
+            if self.use_motion_attn and mtv_motion_tokens is not None and mtv_motion_rotary_emb is not None:                
+                x_motion = self.motion_attn(self.norm4(x), mtv_motion_tokens, mtv_motion_rotary_emb, grid_sizes, mtv_freqs)
+                x = x + x_motion * mtv_strength
 
             if self.rope_func == "comfy_chunked":
                 y = self.ffn_chunked(x, shift_mlp, scale_mlp)
@@ -1154,6 +1197,7 @@ class WanModel(torch.nn.Module):
                  in_dim_ref_conv=16,
                  add_control_adapter=False,
                  in_dim_control_adapter=24,
+                 use_motion_attn=False
                  ):
         r"""
         Initialize the diffusion model backbone.
@@ -1215,6 +1259,7 @@ class WanModel(torch.nn.Module):
         self.offload_device = offload_device
         self.vace_layers = vace_layers
         self.device = main_device
+        self.patched_linear = False
 
         self.blocks_to_swap = -1
         self.offload_txt_emb = False
@@ -1312,9 +1357,12 @@ class WanModel(torch.nn.Module):
             self.blocks = nn.ModuleList([
                 WanAttentionBlock(cross_attn_type, self.in_features, self.out_features, ffn_dim, ffn2_dim, num_heads,
                                 qk_norm, cross_attn_norm, eps,
-                                attention_mode=self.attention_mode, rope_func=self.rope_func)
-                for _ in range(num_layers)
+                                attention_mode=self.attention_mode, rope_func=self.rope_func, use_motion_attn=(i % 4 == 0 and use_motion_attn))
+                for i in range(num_layers)
             ])
+        #MTV Crafter
+        if use_motion_attn:
+            self.pad_motion_tokens = torch.zeros(1, 1, 2048)
 
         # head
         self.head = Head(dim, out_dim, patch_size, eps)
@@ -1543,7 +1591,12 @@ class WanModel(torch.nn.Module):
         standin_input=None,
         fantasy_portrait_input=None,
         phantom_ref=None,
-        reverse_time=False
+        reverse_time=False,
+        mtv_motion_tokens=None,
+        mtv_motion_rotary_emb=None,
+        mtv_freqs=None,
+        mtv_strength=1.0,
+        
     ):
         r"""
         Forward pass through the diffusion model
@@ -1569,6 +1622,11 @@ class WanModel(torch.nn.Module):
         # Stand-In only used on first positive pass, then cached in kv_cache
         if is_uncond or current_step > 0: 
             standin_input = None
+        
+        # MTV Crafter motion projection
+        if mtv_motion_tokens is not None:
+            bs, motion_seq_len =  mtv_motion_tokens.shape[0], mtv_motion_tokens.shape[1]
+            mtv_motion_tokens = torch.cat([mtv_motion_tokens, self.pad_motion_tokens.to(mtv_motion_tokens).expand(bs, motion_seq_len, -1)], dim=-1)
 
         # Fantasy Portrait
         adapter_proj = ip_scale = None
@@ -2010,7 +2068,11 @@ class WanModel(torch.nn.Module):
                 e_ip=e0_ip if x_ip is not None else None,
                 adapter_proj=adapter_proj,
                 ip_scale=ip_scale,
-                reverse_time=reverse_time
+                reverse_time=reverse_time,
+                mtv_motion_tokens=mtv_motion_tokens,
+                mtv_motion_rotary_emb=mtv_motion_rotary_emb,
+                mtv_strength=mtv_strength,
+                mtv_freqs=mtv_freqs
             )
             
             if vace_data is not None:

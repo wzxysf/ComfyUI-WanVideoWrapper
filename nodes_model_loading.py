@@ -701,15 +701,10 @@ class WanVideoSetLoRAs:
             
             del lora_sd
 
-        if 'transformer_options' not in patcher.model_options:
-            patcher.model_options['transformer_options'] = {}
-
-        patcher.model_options['transformer_options']["patch_linear"] = True
-
         return (patcher,)
 
 def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device, block_swap_args=None):
-    params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio_proj"}       
+    params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio_proj"}       
     
     log.info("Using accelerate to load and assign model weights to device...")
     param_count = sum(1 for _ in transformer.named_parameters())
@@ -736,7 +731,7 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
             continue
         dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
         dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
-        if "modulation" in name or "norm" in name or "bias" in name:
+        if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
             dtype_to_use = base_dtype
         if "patch_embedding" in name:
             dtype_to_use = torch.float32
@@ -1143,7 +1138,8 @@ class WanVideoModelLoader:
             "inject_sample_info": True if "fps_embedding.weight" in sd else False,
             "add_ref_conv": True if "ref_conv.weight" in sd else False,
             "in_dim_ref_conv": sd["ref_conv.weight"].shape[1] if "ref_conv.weight" in sd else None,
-            "add_control_adapter": True if "control_adapter.conv.weight" in sd else False
+            "add_control_adapter": True if "control_adapter.conv.weight" in sd else False,
+            "use_motion_attn": True if "blocks.0.motion_attn.k.weight" in sd else False
         }
 
         with init_empty_weights():
@@ -1238,7 +1234,7 @@ class WanVideoModelLoader:
         if "fp8" in quantization:
             for k, v in sd.items():
                 if k.endswith(".scale_weight"):
-                    scale_weights[k] = v
+                    scale_weights[k] = v.to(base_dtype)
         
         if "fp8_e4m3fn" in quantization:
             weight_dtype = torch.float8_e4m3fn
@@ -1250,7 +1246,6 @@ class WanVideoModelLoader:
         params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv"}
 
         control_lora = False
-        patch_linear = (True if "scaled" in quantization or (lora is not None and not merge_loras) else False)
 
         if not merge_loras and control_lora:
             log.warning("Control-LoRA patching is only supported with merge_loras=True")
@@ -1259,7 +1254,7 @@ class WanVideoModelLoader:
             patcher, control_lora = add_lora_weights(patcher, lora, base_dtype, merge_loras=merge_loras)
       
         if not gguf:
-            if merge_loras and not patch_linear:
+            if merge_loras and lora is not None:
                 if not lora_low_mem_load:
                     load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
                 
@@ -1274,9 +1269,11 @@ class WanVideoModelLoader:
                 if not control_lora:
                     scale_weights.clear()
                     patcher.patches.clear()
+                transformer.patched_linear = False
             else:
                 from .custom_linear import _replace_linear
                 transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
+                transformer.patched_linear = True
 
         if "fast" in quantization:
             if lora is not None and not merge_loras:
@@ -1330,7 +1327,7 @@ class WanVideoModelLoader:
                 compile_args = compile_args,
             )
 
-        if merge_loras:
+        if merge_loras and lora is not None:
             log.info(f"Moving diffusion model from {patcher.model.diffusion_model.device} to {offload_device}")
             patcher.model.diffusion_model.to(offload_device)
             gc.collect()
@@ -1354,7 +1351,6 @@ class WanVideoModelLoader:
         if 'transformer_options' not in patcher.model_options:
             patcher.model_options['transformer_options'] = {}
         patcher.model_options["transformer_options"]["block_swap_args"] = block_swap_args
-        patcher.model_options["transformer_options"]["patch_linear"] = patch_linear
         patcher.model_options["transformer_options"]["merge_loras"] = merge_loras
 
         for model in mm.current_loaded_models:

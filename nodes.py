@@ -16,9 +16,10 @@ from .utils import(log, print_memory, apply_lora, clip_encode_image_tiled, fouri
                    add_noise_to_reference_video, optimized_scale, setup_radial_attention, 
                    compile_model, dict_to_device, tangential_projection, set_module_tensor_to_device, get_raag_guidance)
 from .cache_methods.cache_methods import cache_report
+from .nodes_model_loading import load_weights, load_weights_gguf
 from .enhance_a_video.globals import set_enhance_weight, set_num_frames
 from .taehv import TAEHV
-
+from contextlib import nullcontext
 from einops import rearrange
 
 from comfy import model_management as mm
@@ -796,6 +797,39 @@ class WanVideoAddStandInLatent:
         updated["standin_input"] = new_entry
         return (updated,)
 
+class WanVideoAddMTVMotion:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "embeds": ("WANVIDIMAGE_EMBEDS",),
+                    "mtv_crafter_motion": ("MTVCRAFTERMOTION",),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the MTV motion"}),
+                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent to apply the ref "}),
+                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent to apply the ref "}),
+                }
+        }
+
+    RETURN_TYPES = ("WANVIDIMAGE_EMBEDS",)
+    RETURN_NAMES = ("image_embeds",)
+    FUNCTION = "add"
+    CATEGORY = "WanVideoWrapper"
+
+    def add(self, embeds, mtv_crafter_motion, strength, start_percent, end_percent):
+        # Prepare the new extra latent entry
+        new_entry = {
+            "mtv_motion_tokens": mtv_crafter_motion["mtv_motion_tokens"],
+            "strength": strength,
+            "start_percent": start_percent,
+            "end_percent": end_percent,
+            "global_mean": mtv_crafter_motion["global_mean"],
+            "global_std": mtv_crafter_motion["global_std"]
+        }
+
+        # Return a new dict with updated extra_latents
+        updated = dict(embeds)
+        updated["mtv_crafter_motion"] = new_entry
+        return (updated,)
+    
 class WanVideoImageToVideoEncode:
     @classmethod
     def INPUT_TYPES(s):
@@ -1620,17 +1654,13 @@ class WanVideoSampler:
         is_5b = transformer.out_dim == 48
         vae_upscale_factor = 16 if is_5b else 8
 
-        patch_linear = transformer_options.get("patch_linear", False)
-        from .nodes_model_loading import load_weights, load_weights_gguf
-        weights_assigned = False
-        if not merge_loras and gguf_reader is None:
+        if transformer.patched_linear and gguf_reader is None:
             load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, dtype, device, block_swap_args=block_swap_args)
-            weights_assigned = True
 
         if gguf_reader is not None:
             load_weights_gguf(transformer, gguf_reader, patcher.model["sd"], dtype, device, patcher)
             set_lora_params_gguf(transformer, patcher.patches)
-        elif len(patcher.patches) != 0 and patch_linear:
+        elif len(patcher.patches) != 0 and transformer.patched_linear:
             log.info(f"Using {len(patcher.patches)} LoRA weight patches for WanVideo model")
             if not merge_loras and fp8_matmul:
                 raise NotImplementedError("FP8 matmul with unmerged LoRAs is not supported")
@@ -1998,7 +2028,7 @@ class WanVideoSampler:
                 "start_percent": fantasy_portrait_embeds.get("start_percent", 0.0),
                 "end_percent": fantasy_portrait_embeds.get("end_percent", 1.0),
             }
-    
+
         # MiniMax Remover
         minimax_latents = minimax_mask_latents = None
         minimax_latents = image_embeds.get("minimax_latents", None)
@@ -2056,6 +2086,30 @@ class WanVideoSampler:
             from .context_windows.context import get_context_scheduler, create_window_mask, WindowTracker
             self.window_tracker = WindowTracker(verbose=context_options["verbose"])
             context = get_context_scheduler(context_schedule)
+
+        #MTV Crafter
+        mtv_input = image_embeds.get("mtv_crafter_motion", None)
+        if mtv_input is not None:
+            from .MTV.mtv import prepare_motion_embeddings
+            log.info("Using MTV Crafter embeddings")
+            mtv_start_percent = mtv_input.get("start_percent", 0.0)
+            mtv_end_percent = mtv_input.get("end_percent", 1.0)
+            mtv_strength = mtv_input.get("strength", 1.0)
+            mtv_motion_tokens = mtv_input.get("mtv_motion_tokens", None)
+            if not isinstance(mtv_strength, list):
+                mtv_strength = [mtv_strength] * (steps + 1)
+            d = transformer.dim // transformer.num_heads
+            mtv_freqs = torch.cat([
+                rope_params(1024, d - 4 * (d // 6)),
+                rope_params(1024, 2 * (d // 6)),
+                rope_params(1024, 2 * (d // 6))
+            ],
+            dim=1)
+            motion_rotary_emb = prepare_motion_embeddings(
+                latent_video_length if context_options is None else context_frames, 
+                24, mtv_input["global_mean"], [mtv_input["global_std"]], device=device)
+            log.info(f"mtv_motion_rotary_emb: {motion_rotary_emb[0].shape}")
+            mtv_freqs = mtv_freqs.to(device, dtype)
 
         # vid2vid
         if samples is not None:
@@ -2162,12 +2216,8 @@ class WanVideoSampler:
         mm.soft_empty_cache()
         gc.collect()
 
-        #region transformer settings
-        if transformer_options is not None:
-            block_swap_args = transformer_options.get("block_swap_args", None)
-
         #blockswap init
-        if block_swap_args is not None:
+        if block_swap_args is not None and not transformer.patched_linear:
             transformer.use_non_blocking = block_swap_args.get("use_non_blocking", False)
             for name, param in transformer.named_parameters():
                 if "block" not in name:
@@ -2318,10 +2368,12 @@ class WanVideoSampler:
         #region model pred
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None, 
                              control_latents=None, vace_data=None, unianim_data=None, audio_proj=None, control_camera_latents=None, 
-                             add_cond=None, cache_state=None, context_window=None, multitalk_audio_embeds=None, fantasy_portrait_input=None, reverse_time=False):
+                             add_cond=None, cache_state=None, context_window=None, multitalk_audio_embeds=None, fantasy_portrait_input=None, reverse_time=False,
+                             mtv_motion_tokens=None):
             nonlocal transformer
             z = z.to(dtype)
-            with torch.autocast(device_type=mm.get_autocast_device(device), dtype=dtype, enabled=("fp8" in model["quantization"])):
+            autocast_enabled = ("fp8" in model["quantization"] and not transformer.patched_linear)
+            with torch.autocast(device_type=mm.get_autocast_device(device), dtype=dtype) if autocast_enabled else nullcontext():
 
                 if use_cfg_zero_star and (idx <= zero_star_steps) and use_zero_init:
                     return z*0, None
@@ -2380,7 +2432,13 @@ class WanVideoSampler:
 
                 if recammaster is not None:
                     z = torch.cat([z, recam_latents.to(z)], dim=1)
-                    
+
+                if mtv_input is not None:
+                    if ((mtv_start_percent <= current_step_percentage <= mtv_end_percent) or \
+                            (mtv_end_percent > 0 and idx == 0 and current_step_percentage >= mtv_start_percent)):
+                        mtv_motion_tokens = mtv_motion_tokens.to(z)
+                        mtv_motion_rotary_emb = motion_rotary_emb
+
                 use_phantom = False
                 phantom_ref = None
                 if phantom_latents is not None:
@@ -2483,7 +2541,11 @@ class WanVideoSampler:
                     "standin_input": standin_input,
                     "fantasy_portrait_input": fantasy_portrait_input,
                     "phantom_ref": phantom_ref,
-                    "reverse_time": reverse_time
+                    "reverse_time": reverse_time,
+                    "mtv_motion_tokens": mtv_motion_tokens if mtv_input is not None else None,
+                    "mtv_motion_rotary_emb": mtv_motion_rotary_emb if mtv_input is not None else None,
+                    "mtv_strength": mtv_strength[idx] if mtv_input is not None else 1.0,
+                    "mtv_freqs": mtv_freqs if mtv_input is not None else None,
                 }
 
                 batch_size = 1
@@ -2994,7 +3056,17 @@ class WanVideoSampler:
                                     "start_percent": unianimate_poses["start_percent"],
                                     "end_percent": unianimate_poses["end_percent"]
                                 }
-                                
+
+                            partial_mtv_motion_tokens = None
+                            if mtv_input is not None:
+                                start_token_index = c[0] * 24
+                                end_token_index = (c[-1] + 1) * 24
+                                partial_mtv_motion_tokens = mtv_motion_tokens[:, start_token_index:end_token_index, :]
+                                print("mtv_motion_tokens", mtv_motion_tokens.shape)
+                                if context_options["verbose"]:
+                                    log.info(f"context window: {c}")
+                                    log.info(f"motion_token_indices: {start_token_index}-{end_token_index}")
+
                             partial_add_cond = None
                             if add_cond is not None:
                                 partial_add_cond = add_cond[:, :, c].to(device, dtype)
@@ -3011,7 +3083,8 @@ class WanVideoSampler:
                                 cfg[idx], positive, 
                                 text_embeds["negative_prompt_embeds"], 
                                 partial_timestep, idx, partial_img_emb, clip_fea, partial_control_latents, partial_vace_context, partial_unianim_data,partial_audio_proj,
-                                partial_control_camera_latents, partial_add_cond, current_teacache, context_window=c, fantasy_portrait_input=partial_fantasy_portrait_input)
+                                partial_control_camera_latents, partial_add_cond, current_teacache, context_window=c, fantasy_portrait_input=partial_fantasy_portrait_input,
+                                mtv_motion_tokens=partial_mtv_motion_tokens)
 
                             if cache_args is not None:
                                 self.window_tracker.cache_states[window_id] = new_teacache
@@ -3282,7 +3355,7 @@ class WanVideoSampler:
                             text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
-                            cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input)
+                            cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens)
                         if bidirectional_sampling:
                             noise_pred_flipped, self.cache_state = predict_with_cfg(
                             latent_model_input_flipped, 
@@ -3290,7 +3363,7 @@ class WanVideoSampler:
                             text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
-                            cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, reverse_time=True)
+                            cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens,reverse_time=True)
 
                     if latent_shift_loop:
                         #reverse latent shift
@@ -3616,7 +3689,8 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoLatentReScale": WanVideoLatentReScale,
     "WanVideoScheduler": WanVideoScheduler,
     "WanVideoAddStandInLatent": WanVideoAddStandInLatent,
-    "WanVideoAddControlEmbeds": WanVideoAddControlEmbeds
+    "WanVideoAddControlEmbeds": WanVideoAddControlEmbeds,
+    "WanVideoAddMTVMotion": WanVideoAddMTVMotion,
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoSampler": "WanVideo Sampler",
@@ -3649,5 +3723,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoAddExtraLatent": "WanVideo Add Extra Latent",
     "WanVideoLatentReScale": "WanVideo Latent ReScale",
     "WanVideoAddStandInLatent": "WanVideo Add StandIn Latent",
-    "WanVideoAddControlEmbeds": "WanVideo Add Control Embeds"
+    "WanVideoAddControlEmbeds": "WanVideo Add Control Embeds",
+    "WanVideoAddMTVMotion": "WanVideo MTV Crafter Motion"
     }

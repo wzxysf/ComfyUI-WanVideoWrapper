@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from accelerate import init_empty_weights
+from comfy.ops import cast_bias_weight
 
 #based on https://github.com/huggingface/diffusers/blob/main/src/diffusers/quantizers/gguf/utils.py
 def _replace_linear(model, compute_dtype, state_dict, prefix="", patches=None, scale_weights=None):
@@ -74,10 +75,12 @@ class CustomLinear(nn.Linear):
         self.lora = None
         self.step = 0
         self.scale_weight = scale_weight
+        self.bias_function = []
+        self.weight_function = []
 
     def forward(self, input):
-        weight = self.weight.to(input.dtype)
-        bias = self.bias.to(input.dtype) if self.bias is not None else None
+        weight, bias = cast_bias_weight(self, input)
+
         if self.scale_weight is not None:
             scale_weight = self.scale_weight.to(input.device)
             if weight.numel() < input.numel():
@@ -86,7 +89,7 @@ class CustomLinear(nn.Linear):
                 input = input * scale_weight
 
         if self.lora is not None:
-            weight = self.apply_lora(weight).to(input.dtype)
+            weight = self.apply_lora(weight).to(self.compute_dtype)
 
         return torch.nn.functional.linear(input, weight, bias)
 
