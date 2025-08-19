@@ -948,7 +948,7 @@ class WanVideoModelLoader:
         mm.unload_all_models()
         mm.cleanup_models()
         mm.soft_empty_cache()
-        manual_offloading = True
+
         if "sage" in attention_mode:
             try:
                 from sageattention import sageattn
@@ -964,8 +964,6 @@ class WanVideoModelLoader:
             if merge_loras is True:
                 raise ValueError("GGUF models do not support LoRA merging, please disable merge_loras in the LoRA select node.")
 
-                
-        manual_offloading = True
         transformer_load_device = device if load_device == "main_device" else offload_device
         
         base_dtype = {"fp8_e4m3fn": torch.float8_e4m3fn, "fp8_e4m3fn_fast": torch.float8_e4m3fn, "bf16": torch.bfloat16, "fp16": torch.float16, "fp16_fast": torch.float16, "fp32": torch.float32}[base_precision]
@@ -1366,7 +1364,6 @@ class WanVideoModelLoader:
         patcher.model["weight_dtype"] = weight_dtype
         patcher.model["base_path"] = model_path
         patcher.model["model_name"] = model
-        patcher.model["manual_offloading"] = manual_offloading
         patcher.model["quantization"] = quantization
         patcher.model["auto_cpu_offload"] = True if vram_management_args is not None else False
         patcher.model["control_lora"] = control_lora

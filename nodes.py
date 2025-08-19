@@ -2218,38 +2218,38 @@ class WanVideoSampler:
         gc.collect()
 
         #blockswap init
-        if block_swap_args is not None and not transformer.patched_linear:
-            transformer.use_non_blocking = block_swap_args.get("use_non_blocking", False)
-            for name, param in transformer.named_parameters():
-                if "block" not in name:
-                    param.data = param.data.to(device)
-                if "control_adapter" in name:
-                    param.data = param.data.to(device)
-                elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
-                    param.data = param.data.to(offload_device)
-                elif block_swap_args["offload_img_emb"] and "img_emb" in name:
-                    param.data = param.data.to(offload_device)
+        if not transformer.patched_linear:
+            if block_swap_args is not None:
+                transformer.use_non_blocking = block_swap_args.get("use_non_blocking", False)
+                for name, param in transformer.named_parameters():
+                    if "block" not in name:
+                        param.data = param.data.to(device)
+                    if "control_adapter" in name:
+                        param.data = param.data.to(device)
+                    elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
+                        param.data = param.data.to(offload_device)
+                    elif block_swap_args["offload_img_emb"] and "img_emb" in name:
+                        param.data = param.data.to(offload_device)
 
-            transformer.block_swap(
-                block_swap_args["blocks_to_swap"] - 1 ,
-                block_swap_args["offload_txt_emb"],
-                block_swap_args["offload_img_emb"],
-                vace_blocks_to_swap = block_swap_args.get("vace_blocks_to_swap", None),
-                prefetch_blocks = block_swap_args.get("prefetch_blocks", 0),
-                block_swap_debug = block_swap_args.get("block_swap_debug", False),
-            )
-        elif model["auto_cpu_offload"]:
-            for module in transformer.modules():
-                if hasattr(module, "offload"):
-                    module.offload()
-                if hasattr(module, "onload"):
-                    module.onload()
-            for block in transformer.blocks:
-                block.modulation = torch.nn.Parameter(block.modulation.to(device))
-            transformer.head.modulation = torch.nn.Parameter(transformer.head.modulation.to(device))
-
-        #elif model["manual_offloading"]:
-        #    transformer.to(device)
+                transformer.block_swap(
+                    block_swap_args["blocks_to_swap"] - 1 ,
+                    block_swap_args["offload_txt_emb"],
+                    block_swap_args["offload_img_emb"],
+                    vace_blocks_to_swap = block_swap_args.get("vace_blocks_to_swap", None),
+                    prefetch_blocks = block_swap_args.get("prefetch_blocks", 0),
+                    block_swap_debug = block_swap_args.get("block_swap_debug", False),
+                )
+            elif model["auto_cpu_offload"]:
+                for module in transformer.modules():
+                    if hasattr(module, "offload"):
+                        module.offload()
+                    if hasattr(module, "onload"):
+                        module.onload()
+                for block in transformer.blocks:
+                    block.modulation = torch.nn.Parameter(block.modulation.to(device))
+                transformer.head.modulation = torch.nn.Parameter(transformer.head.modulation.to(device))
+            else:
+                transformer.to(device)
 
         # Initialize Cache if enabled
         transformer.enable_teacache = transformer.enable_magcache = transformer.enable_easycache = False
@@ -2657,7 +2657,7 @@ class WanVideoSampler:
                 except Exception as e:
                     log.error(f"Error during model prediction: {e}")
                     if force_offload:
-                        if model["manual_offloading"]:
+                        if not model["auto_cpu_offload"]:
                             offload_transformer(transformer)
                     raise e
 
@@ -3256,36 +3256,36 @@ class WanVideoSampler:
 
                             if offload:
                                 #blockswap init
-                                if transformer_options is not None:
-                                    block_swap_args = transformer_options.get("block_swap_args", None)
+                                if not transformer.patched_linear:
+                                    if block_swap_args is not None:
+                                        transformer.use_non_blocking = block_swap_args.get("use_non_blocking", False)
+                                        for name, param in transformer.named_parameters():
+                                            if "block" not in name:
+                                                param.data = param.data.to(device)
+                                            if "control_adapter" in name:
+                                                param.data = param.data.to(device)
+                                            elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
+                                                param.data = param.data.to(offload_device)
+                                            elif block_swap_args["offload_img_emb"] and "img_emb" in name:
+                                                param.data = param.data.to(offload_device)
 
-                                if block_swap_args is not None:
-                                    transformer.use_non_blocking = block_swap_args.get("use_non_blocking", False)
-                                    for name, param in transformer.named_parameters():
-                                        if "block" not in name:
-                                            param.data = param.data.to(device)
-                                        if "control_adapter" in name:
-                                            param.data = param.data.to(device)
-                                        elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
-                                            param.data = param.data.to(offload_device)
-                                        elif block_swap_args["offload_img_emb"] and "img_emb" in name:
-                                            param.data = param.data.to(offload_device)
-
-                                    transformer.block_swap(
-                                        block_swap_args["blocks_to_swap"] - 1 ,
-                                        block_swap_args["offload_txt_emb"],
-                                        block_swap_args["offload_img_emb"],
-                                        vace_blocks_to_swap = block_swap_args.get("vace_blocks_to_swap", None),
-                                    )
-
-                                elif model["auto_cpu_offload"]:
-                                    for module in transformer.modules():
-                                        if hasattr(module, "offload"):
-                                            module.offload()
-                                        if hasattr(module, "onload"):
-                                            module.onload()
-                                elif model["manual_offloading"]:
-                                    transformer.to(device)
+                                        transformer.block_swap(
+                                            block_swap_args["blocks_to_swap"] - 1 ,
+                                            block_swap_args["offload_txt_emb"],
+                                            block_swap_args["offload_img_emb"],
+                                            vace_blocks_to_swap = block_swap_args.get("vace_blocks_to_swap", None),
+                                        )
+                                    elif model["auto_cpu_offload"]:
+                                        for module in transformer.modules():
+                                            if hasattr(module, "offload"):
+                                                module.offload()
+                                            if hasattr(module, "onload"):
+                                                module.onload()
+                                        for block in transformer.blocks:
+                                            block.modulation = torch.nn.Parameter(block.modulation.to(device))
+                                        transformer.head.modulation = torch.nn.Parameter(transformer.head.modulation.to(device))
+                                    else:
+                                        transformer.to(device)
 
                             comfy_pbar = ProgressBar(len(timesteps)-1)
                             for i in tqdm(range(len(timesteps)-1)):
@@ -3337,7 +3337,7 @@ class WanVideoSampler:
                                 comfy_pbar.update(1)
 
                             if offload:
-                                transformer.to(offload_device)
+                                offload_transformer(transformer)
                             vae.to(device)
                             videos = vae.decode(x0.unsqueeze(0).to(vae.dtype), device=device, tiled=tiled_vae)
                             vae.to(offload_device)
@@ -3410,7 +3410,7 @@ class WanVideoSampler:
                         
                         del noise, latent
                         if force_offload:
-                            if model["manual_offloading"]:
+                            if not model["auto_cpu_offload"]:
                                 transformer.to(offload_device)
                                 mm.soft_empty_cache()
                                 gc.collect()
@@ -3508,7 +3508,7 @@ class WanVideoSampler:
             except Exception as e:
                 log.error(f"Error during sampling: {e}")
                 if force_offload:
-                    if model["manual_offloading"]:
+                    if not model["auto_cpu_offload"]:
                         offload_transformer(transformer)
                 raise e
                 
@@ -3516,7 +3516,7 @@ class WanVideoSampler:
             cache_report(transformer, cache_args)
 
         if force_offload:
-            if model["manual_offloading"]:
+            if not model["auto_cpu_offload"]:
                 offload_transformer(transformer)
 
         try:
