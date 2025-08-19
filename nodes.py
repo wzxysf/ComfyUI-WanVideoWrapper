@@ -3140,7 +3140,7 @@ class WanVideoSampler:
                         current_condframe_index = 0
                         
                         if multitalk_embeds is not None:
-                            total_frames = len(multitalk_audio_embedding)
+                            total_frames = len(multitalk_audio_embedding[0])
                         
                         pcd_data = pcd_data_input = None
                         if uni3c_embeds is not None:
@@ -3155,6 +3155,8 @@ class WanVideoSampler:
                             }
 
                         estimated_iterations = total_frames // (frame_num - motion_frame) + 1
+                        log.info(f"Total frames: {total_frames}, frame_num: {frame_num}, motion_frame: {motion_frame}")
+                        log.info(f"Estimated iterations: {estimated_iterations}")
                         loop_pbar = tqdm(total=estimated_iterations, desc="Generating video clips")
                         callback = prepare_callback(patcher, estimated_iterations)
 
