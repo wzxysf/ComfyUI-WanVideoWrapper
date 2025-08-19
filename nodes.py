@@ -3104,6 +3104,8 @@ class WanVideoSampler:
                         frame_num = clip_length = image_embeds.get("num_frames", 81)
                         vae = image_embeds.get("vae", None)
                         clip_embeds = image_embeds.get("clip_context", None)
+                        if clip_embeds is not None:
+                            clip_embeds = clip_embeds.to(dtype)
                         colormatch = image_embeds.get("colormatch", "disabled")
                         motion_frame = image_embeds.get("motion_frame", 25)
                         target_w = image_embeds.get("target_w", None)
@@ -3295,7 +3297,7 @@ class WanVideoSampler:
                                     cfg[idx], 
                                     text_embeds["prompt_embeds"], 
                                     text_embeds["negative_prompt_embeds"], 
-                                    timestep, idx, y.squeeze(0), clip_embeds.to(dtype), control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
+                                    timestep, idx, y.squeeze(0), clip_embeds, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                                     cache_state=self.cache_state, multitalk_audio_embeds=audio_embs)
 
                                 if callback is not None:
