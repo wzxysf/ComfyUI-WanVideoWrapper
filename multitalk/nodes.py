@@ -273,6 +273,10 @@ class WanVideoImageToVideoMultiTalk:
                 "start_image": ("IMAGE", {"tooltip": "Image to encode"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
                 "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
+                "mode": ([
+                    "multitalk",
+                    "infinitetalk"
+                ], {"default": "multitalk", "tooltip": "The sampling strategy to use in the long video generation loop, should match the model used"})
             }
         }
 
@@ -281,7 +285,7 @@ class WanVideoImageToVideoMultiTalk:
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
 
-    def process(self, vae, width, height, frame_window_size, motion_frame, force_offload, colormatch, start_image=None, tiled_vae=False, clip_embeds=None):
+    def process(self, vae, width, height, frame_window_size, motion_frame, force_offload, colormatch, start_image=None, tiled_vae=False, clip_embeds=None, mode="multitalk"):
 
         H = height
         W = width
@@ -311,7 +315,8 @@ class WanVideoImageToVideoMultiTalk:
             "vae": vae,
             "target_shape": target_shape,
             "clip_context": clip_embeds.get("clip_embeds", None) if clip_embeds is not None else None,
-            "colormatch": colormatch
+            "colormatch": colormatch,
+            "multitalk_mode": mode
         }
 
         return (image_embeds,)

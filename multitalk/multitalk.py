@@ -2,7 +2,6 @@ from diffusers import ModelMixin, ConfigMixin
 from einops import rearrange, repeat
 import torch
 import torch.nn as nn
-from functools import lru_cache
 from ..wanvideo.modules.attention import attention
 
 from comfy import model_management as mm
@@ -118,8 +117,6 @@ class RotaryPositionalEmbedding1D(nn.Module):
         self.head_dim = head_dim
         self.base = 10000
 
-
-    #@lru_cache(maxsize=32)
     def precompute_freqs_cis_1d(self, pos_indices):
 
         freqs = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2)[: (self.head_dim // 2)].float() / self.head_dim))
