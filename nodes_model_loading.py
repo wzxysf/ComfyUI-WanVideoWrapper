@@ -1209,6 +1209,8 @@ class WanVideoModelLoader:
             sd.update(ip_adapter_sd)
 
         if multitalk_model is not None:
+            if multitalk_model["is_gguf"] and not gguf:
+                raise ValueError("Multitalk/InfiniteTalk model is a GGUF model, main model also has to be a GGUF model.")
             # init audio module
             from .multitalk.multitalk import SingleStreamMultiAttention
             from .wanvideo.modules.model import WanRMSNorm, WanLayerNorm
@@ -1231,7 +1233,6 @@ class WanVideoModelLoader:
             log.info("MultiTalk model detected, patching model...")
             transformer.audio_proj = multitalk_model["proj_model"]
             sd.update(multitalk_model["sd"])
-
         
         # Additional cond latents
         if "add_conv_in.weight" in sd:
@@ -1311,6 +1312,9 @@ class WanVideoModelLoader:
             patch_linear = False
 
         #del sd
+
+        if multitalk_model is not None:
+            transformer.audio_proj = multitalk_model["proj_model"]
 
         if vram_management_args is not None:
             if gguf:
