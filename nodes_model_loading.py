@@ -1272,7 +1272,7 @@ class WanVideoModelLoader:
         else:
             weight_dtype = base_dtype
         
-        params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv"}
+        params_to_keep = {"norm", "bias", "time_in", "patch_embedding", "time_", "img_emb", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio_proj"}
 
         control_lora = False
 
@@ -1309,9 +1309,6 @@ class WanVideoModelLoader:
                 raise NotImplementedError("fp8_fast is not supported with unmerged LoRAs")
             from .fp8_optimization import convert_fp8_linear
             convert_fp8_linear(transformer, base_dtype, params_to_keep, scale_weight_keys=scale_weights)
-            patch_linear = False
-
-        #del sd
 
         if multitalk_model is not None:
             transformer.audio_proj = multitalk_model["proj_model"]
