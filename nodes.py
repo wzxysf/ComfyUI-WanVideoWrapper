@@ -3170,9 +3170,9 @@ class WanVideoSampler:
                                 latent_motion_frames = y[:, :, :cur_motion_frames_latent_num][0] # C T H W
                             else:
                                 if is_first_clip:
-                                    latent_motion_frames = vae.encode(cond_image.to(device, vae.dtype), device=device, tiled=tiled_vae).to(dtype)
+                                    latent_motion_frames = vae.encode(cond_image.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)
                                 else:
-                                    latent_motion_frames = vae.encode(cond_frame.to(device, vae.dtype), device=device, tiled=tiled_vae).to(dtype)
+                                    latent_motion_frames = vae.encode(cond_frame.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)
                                 latent_motion_frames = latent_motion_frames[0]
                             vae.to(offload_device)
 
