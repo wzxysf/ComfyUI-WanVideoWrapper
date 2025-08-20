@@ -1260,6 +1260,8 @@ class WanModel(torch.nn.Module):
         self.video_attention_split_steps = []
         self.lora_scheduling_enabled = False
 
+        self.multitalk_model_type = None
+
         # embeddings
         self.patch_embedding = nn.Conv3d(
             in_dim, dim, kernel_size=patch_size, stride=patch_size)

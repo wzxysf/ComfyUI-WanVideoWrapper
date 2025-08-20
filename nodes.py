@@ -2069,7 +2069,7 @@ class WanVideoSampler:
         
         # extra latents (Pusa) and 5b
         latents_to_insert = add_index = None
-        if (extra_latents := image_embeds.get("extra_latents", None)) is not None:
+        if (extra_latents := image_embeds.get("extra_latents", None)) is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
             all_indices = []
             for entry in extra_latents:
                 add_index = entry["index"]
@@ -2725,6 +2725,15 @@ class WanVideoSampler:
                         latent_flipped = torch.flip(latent, dims=[1])
                         latent_model_input_flipped = latent_flipped.to(device)
 
+                    #InfiniteTalk first frame handling
+                    if (extra_latents is not None
+                        and not multitalk_sampling
+                        and transformer.multitalk_model_type=="InfiniteTalk"):
+                        for entry in extra_latents:
+                            add_index = entry["index"]
+                            num_extra_frames = entry["samples"].shape[2]
+                            latent[:, add_index:add_index+num_extra_frames] = entry["samples"].to(latent)
+
                     latent_model_input = latent.to(device)
 
                     current_step_percentage = idx / len(timesteps)
@@ -3002,6 +3011,8 @@ class WanVideoSampler:
                     #region multitalk
                     elif multitalk_sampling:
                         mode = image_embeds.get("multitalk_mode", "multitalk")
+                        if mode == "auto":
+                            mode = transformer.multitalk_model_type.lower()
                         log.info(f"Multitalk mode: {mode}")
                         original_images = cond_image = image_embeds.get("multitalk_start_image", None)
                         offload = image_embeds.get("force_offload", False)
@@ -3399,6 +3410,15 @@ class WanVideoSampler:
                                     **scheduler_step_args)[0].squeeze(0)
                                 latent_backwards = torch.flip(latent_backwards, dims=[1])
                                 latent = latent * 0.5 + latent_backwards * 0.5
+                        
+                        #InfiniteTalk first frame handling
+                        if (extra_latents is not None
+                            and not multitalk_sampling
+                            and transformer.multitalk_model_type=="InfiniteTalk"):
+                            for entry in extra_latents:
+                                add_index = entry["index"]
+                                num_extra_frames = entry["samples"].shape[2]
+                                latent[:, add_index:add_index+num_extra_frames] = entry["samples"].to(latent)
 
                         if freeinit_args is not None:
                             current_latent = latent.clone()

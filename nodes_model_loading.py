@@ -1014,6 +1014,7 @@ class WanVideoModelLoader:
         if multitalk_model is not None:
             if multitalk_model["is_gguf"] and not gguf:
                 raise ValueError("Multitalk/InfiniteTalk model is a GGUF model, main model also has to be a GGUF model.")
+            multitalk_model_type = multitalk_model.get("model_type", "MultiTalk")
             # init audio module
             from .multitalk.multitalk import SingleStreamMultiAttention
             from .wanvideo.modules.model import WanRMSNorm, WanLayerNorm
@@ -1033,8 +1034,9 @@ class WanVideoModelLoader:
                         attention_mode=attention_mode,
                     )
                 block.norm_x = WanLayerNorm(dim, transformer.eps, elementwise_affine=True) if norm_input_visual else nn.Identity()
-            log.info("MultiTalk model detected, patching model...")
+            log.info(f"{multitalk_model_type} detected, patching model...")
             transformer.audio_proj = multitalk_model["proj_model"]
+            transformer.multitalk_model_type = multitalk_model_type
             sd.update(multitalk_model["sd"])
         
         # Additional cond latents

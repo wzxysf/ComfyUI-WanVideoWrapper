@@ -52,7 +52,8 @@ class MultiTalkModelLoader:
         multitalk = {
             "proj_model": multitalk_proj_model,
             "sd": sd,
-            "is_gguf": model_path.endswith(".gguf")
+            "is_gguf": model_path.endswith(".gguf"),
+            "model_type": "InfiniteTalk" if "infinite" in model.lower() else "MultiTalk",
         }
 
         return (multitalk,)
@@ -266,9 +267,10 @@ class WanVideoImageToVideoMultiTalk:
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
                 "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
                 "mode": ([
+                    "auto",
                     "multitalk",
                     "infinitetalk"
-                ], {"default": "multitalk", "tooltip": "The sampling strategy to use in the long video generation loop, should match the model used"})
+                ], {"default": "auto", "tooltip": "The sampling strategy to use in the long video generation loop, should match the model used"})
             }
         }
 
@@ -321,7 +323,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MultiTalkModelLoader": "MultiTalk Model Loader",
-    "MultiTalkWav2VecEmbeds": "MultiTalk Wav2Vec Embeds",
-    "WanVideoImageToVideoMultiTalk": "WanVideo Image To Video MultiTalk"
+    "MultiTalkModelLoader": "Multi/InfiniteTalk Model Loader",
+    "MultiTalkWav2VecEmbeds": "Multi/InfiniteTalk Wav2Vec Embeds",
+    "WanVideoImageToVideoMultiTalk": "WanVideo Image To Video Multi/InfiniteTalk"
 }
