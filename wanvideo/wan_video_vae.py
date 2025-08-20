@@ -1022,10 +1022,10 @@ class VideoVAE_(nn.Module):
     def encode(self, x, pbar=True):
         self.clear_cache()
         ## cache
-        if pbar:
-            pbar = ProgressBar(x.shape[2])
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
+        if pbar:
+            pbar = ProgressBar(iter_)
 
         for i in range(iter_):
             self._enc_conv_idx = [0]
@@ -1039,7 +1039,7 @@ class VideoVAE_(nn.Module):
                                     feat_idx=self._enc_conv_idx)
                 out = torch.cat([out, out_], 2)
             if pbar:
-                pbar.update(iter_)
+                pbar.update(1)
         mu = self.conv1(out).chunk(2, dim=1)[0]
 
         mu = (mu - self.mean.to(mu)) * self.inv_std.to(mu)
@@ -1083,12 +1083,10 @@ class VideoVAE_(nn.Module):
     def decode(self, z, pbar=True):
         self.clear_cache()
         # z: [b,c,t,h,w]
-        if pbar:
-            pbar = ProgressBar(z.shape[2])
-
         z = z / self.inv_std.to(z) + self.mean.to(z)
-
         iter_ = z.shape[2]
+        if pbar:
+            pbar = ProgressBar(iter_)
         x = self.conv2(z)
         for i in range(iter_):
             self._conv_idx = [0]
@@ -1408,11 +1406,13 @@ class VideoVAE38_(VideoVAE_):
                                     attn_scales, self.temperal_upsample, dropout)
 
 
-    def encode(self, x):
+    def encode(self, x, pbar=False):
         self.clear_cache()
         x = patchify(x, patch_size=2)
         t = x.shape[2]
         iter_ = 1 + (t - 1) // 4
+        if pbar:
+            pbar = ProgressBar(iter_)
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
@@ -1424,6 +1424,8 @@ class VideoVAE38_(VideoVAE_):
                                     feat_cache=self._enc_feat_map,
                                     feat_idx=self._enc_conv_idx)
                 out = torch.cat([out, out_], 2)
+            if pbar:
+                pbar.update(1)
         mu = self.conv1(out).chunk(2, dim=1)[0]
         
         mu = (mu - self.mean.to(mu)) * self.inv_std.to(mu)
@@ -1432,12 +1434,13 @@ class VideoVAE38_(VideoVAE_):
         return mu
 
 
-    def decode(self, z):
+    def decode(self, z, pbar=False):
         self.clear_cache()
-        
         z = z / self.inv_std.to(z) + self.mean.to(z)
        
         iter_ = z.shape[2]
+        if pbar:
+            pbar = ProgressBar(iter_)
         x = self.conv2(z)
         for i in range(iter_):
             self._conv_idx = [0]
@@ -1451,6 +1454,8 @@ class VideoVAE38_(VideoVAE_):
                                     feat_cache=self._feat_map,
                                     feat_idx=self._conv_idx)
                 out = torch.cat([out, out_], 2)
+            if pbar:
+                pbar.update(1)
         out = unpatchify(out, patch_size=2)
         self.clear_cache()
         return out
