@@ -2033,7 +2033,7 @@ class WanVideoSampler:
             context = get_context_scheduler(context_schedule)
 
         # vid2vid
-        if samples is not None:
+        if samples is not None and not multitalk_sampling:
             saved_generator_state = samples.get("generator_state", None)
             if saved_generator_state is not None:
                 seed_g.set_state(saved_generator_state)
@@ -2623,7 +2623,7 @@ class WanVideoSampler:
 
         # diff diff prep
         masks = None
-        if samples is not None and mask is not None:
+        if not multitalk_sampling and samples is not None and mask is not None:
             mask = 1 - mask
             thresholds = torch.arange(len(timesteps), dtype=original_image.dtype) / len(timesteps)
             thresholds = thresholds.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)
@@ -2704,7 +2704,7 @@ class WanVideoSampler:
             try:
                 pbar = ProgressBar(len(timesteps))
                 #region main loop start
-                for idx, t in enumerate(tqdm(timesteps)):
+                for idx, t in enumerate(tqdm(timesteps, disable=multitalk_sampling)):
                     if flowedit_args is not None:
                         if idx < skip_steps:
                             continue
@@ -3071,17 +3071,16 @@ class WanVideoSampler:
                             }
 
                         estimated_iterations = total_frames // (frame_num - motion_frame) + 1
-                        loop_pbar = tqdm(total=estimated_iterations, desc="Generating video clips")
+                        loop_pbar = tqdm(total=estimated_iterations, desc="Total progress", position=1, leave=True)
                         callback = prepare_callback(patcher, estimated_iterations)
 
                         audio_embedding = multitalk_audio_embedding
                         human_num = len(audio_embedding)
                         audio_embs = None
                         while True: # start video generation iteratively
+                            cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num-1) // 4)
                             if mode == "infinitetalk":
                                 cond_image = original_images[:, :, current_condframe_index:current_condframe_index+1]
-                                log.info(f"current_condframe_index: {current_condframe_index}")
-                                log.info(f"audio_indices: {audio_start_idx}-{audio_end_idx}|{clip_length}")
                             if multitalk_embeds is not None:
                                 audio_embs = []
                                 # split audio with window size
@@ -3094,7 +3093,6 @@ class WanVideoSampler:
 
                             if uni3c_embeds is not None:
                                 vae.to(device)
-                                print("original_images", original_images.shape)
                                 # Pad original_images if needed
                                 num_frames = original_images.shape[2]
                                 required_frames = audio_end_idx - audio_start_idx
@@ -3117,6 +3115,34 @@ class WanVideoSampler:
                             noise = torch.randn(
                                 16, (frame_num - 1) // 4 + 1,
                                 lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
+                            
+                            if samples is not None:
+                                input_samples = samples["samples"].squeeze(0).to(noise)                                
+                                # Calculate the correct slice based on current iteration
+                                if is_first_clip:
+                                    latent_start_idx = 0
+                                    latent_end_idx = noise.shape[1]
+                                else:
+                                    new_frames_per_iteration = frame_num - motion_frame
+                                    new_latent_frames_per_iteration = ((new_frames_per_iteration - 1) // 4 + 1)
+                                    latent_start_idx = iteration_count * new_latent_frames_per_iteration
+                                    latent_end_idx = latent_start_idx + noise.shape[1]
+
+                                # Check if we have enough frames in input_samples
+                                if latent_end_idx > input_samples.shape[1]:
+                                    # We need more frames than available - pad the input_samples at the end
+                                    pad_length = latent_end_idx - input_samples.shape[1]
+                                    last_frame = input_samples[:, -1:].repeat(1, pad_length, 1, 1)
+                                    input_samples = torch.cat([input_samples, last_frame], dim=1)
+                                input_samples = input_samples[:, latent_start_idx:latent_end_idx]
+
+                                assert input_samples.shape[1] == noise.shape[1], f"Slice mismatch: {input_samples.shape[1]} vs {noise.shape[1]}"
+                                
+                                if add_noise_to_samples:
+                                    latent_timestep = timesteps[0]
+                                    noise = noise * latent_timestep / 1000 + (1 - latent_timestep / 1000) * input_samples
+                                else:
+                                    noise = input_samples
 
                             # get mask
                             msk = torch.ones(1, frame_num, lat_h, lat_w, device=device)
@@ -3138,8 +3164,7 @@ class WanVideoSampler:
 
                             # encode
                             vae.to(device)
-                            y = vae.encode(padding_frames_pixels_values, device=device, tiled=tiled_vae).to(dtype)
-                            cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num-1) // 4)
+                            y = vae.encode(padding_frames_pixels_values, device=device, tiled=tiled_vae, pbar=False).to(dtype)
 
                             if mode == "multitalk":
                                 latent_motion_frames = y[:, :, :cur_motion_frames_latent_num][0] # C T H W
@@ -3162,6 +3187,24 @@ class WanVideoSampler:
                             else:
                                 sample_scheduler, timesteps = get_scheduler(scheduler, steps, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
 
+                                steps = len(timesteps)
+                                if end_step != -1 and start_step >= end_step:
+                                    raise ValueError("start_step must be less than end_step")
+                                if denoise_strength < 1.0:
+                                    if start_step != 0:
+                                        raise ValueError("start_step must be 0 when denoise_strength is used")
+                                    start_step = steps - int(steps * denoise_strength) - 1
+                                if (end_step != -1 or end_step >= steps):
+                                    timesteps = timesteps[:end_step]
+                                    sample_scheduler.sigmas = sample_scheduler.sigmas[:end_step+1]
+                                if start_step > 0:
+                                    timesteps = timesteps[start_step:]
+                                    sample_scheduler.sigmas = sample_scheduler.sigmas[start_step:]
+                                
+                                if sample_scheduler is not None:
+                                    if hasattr(sample_scheduler, 'timesteps'):
+                                        sample_scheduler.timesteps = timesteps
+                                
                                 transformed_timesteps = []
                                 for t in timesteps:
                                     t_tensor = torch.tensor([t.item()], device=device)
@@ -3214,8 +3257,8 @@ class WanVideoSampler:
                                 elif model["manual_offloading"]:
                                     transformer.to(device)
 
-                            comfy_pbar = ProgressBar(len(timesteps)-1)
-                            for i in tqdm(range(len(timesteps)-1)):
+                            sampling_pbar = tqdm(total=len(timesteps)-1, desc=f"Sampling audio indices {audio_start_idx}-{audio_end_idx}", position=0, leave=True)
+                            for i in range(len(timesteps)-1):
                                 timestep = timesteps[i]
                                 latent_model_input = latent.to(device)
                                 if mode == "infinitetalk":
@@ -3228,6 +3271,8 @@ class WanVideoSampler:
                                     text_embeds["negative_prompt_embeds"], 
                                     timestep, idx, y.squeeze(0), clip_embeds, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                                     cache_state=self.cache_state, multitalk_audio_embeds=audio_embs)
+
+                                sampling_pbar.update(1)
 
                                 if callback is not None:
                                     callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach().permute(1,0,2,3)
@@ -3261,13 +3306,14 @@ class WanVideoSampler:
 
                                 x0 = latent.to(device)
                                 del latent_model_input, timestep
-                                comfy_pbar.update(1)
 
                             if offload:
                                 transformer.to(offload_device)
                             vae.to(device)
-                            videos = vae.decode(x0.unsqueeze(0).to(vae.dtype), device=device, tiled=tiled_vae)
+                            videos = vae.decode(x0.unsqueeze(0).to(vae.dtype), device=device, tiled=tiled_vae, pbar=False)
                             vae.to(offload_device)
+
+                            sampling_pbar.close()
                             
                             # cache generated samples
                             videos = torch.stack(videos).cpu() # B C T H W

@@ -1098,6 +1098,7 @@ class WanVideoModelLoader:
                 #for name, param in transformer.named_parameters():
                 #    print(name, param.dtype, param.device, param.shape)
                 pbar.update_absolute(param_count)
+                pbar.update_absolute(0)
 
         comfy_model.diffusion_model = transformer
         comfy_model.load_device = transformer_load_device
