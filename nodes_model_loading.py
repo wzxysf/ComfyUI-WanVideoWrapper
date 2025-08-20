@@ -503,7 +503,7 @@ class WanVideoVACEModelSelect:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "vace_model": (folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' VACE model to use when not using model that has it included"}),
+                "vace_model": (folder_paths.get_filename_list("unet_gguf") + folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' VACE model to use when not using model that has it included"}),
             },
         }
 
@@ -835,7 +835,7 @@ class WanVideoModelLoader:
             if gguf:
                 if not vace_model["path"].endswith(".gguf"):
                     raise ValueError("With GGUF main model the VACE module must also be a GGUF quantized, if the main model already has VACE included, you can disconnect the VACE module loader")
-                vace_sd = load_gguf_checkpoint(model_path)
+                vace_sd = load_gguf_checkpoint(vace_model["path"])
             else:
                 vace_sd = load_torch_file(vace_model["path"], device=transformer_load_device, safe_load=True)
             sd.update(vace_sd)
