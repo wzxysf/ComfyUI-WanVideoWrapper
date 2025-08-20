@@ -3050,7 +3050,7 @@ class WanVideoSampler:
                         is_first_clip = True
                         arrive_last_frame = False
                         cur_motion_frames_num = 1
-                        audio_start_idx = iteration_count = 0
+                        audio_start_idx = iteration_count = step_iteration_count= 0
                         audio_end_idx = audio_start_idx + clip_length
                         indices = (torch.arange(4 + 1) - 2) * 1
                         current_condframe_index = 0
@@ -3273,10 +3273,12 @@ class WanVideoSampler:
                                     cache_state=self.cache_state, multitalk_audio_embeds=audio_embs)
 
                                 sampling_pbar.update(1)
-
+                                
                                 if callback is not None:
                                     callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach().permute(1,0,2,3)
-                                    callback(iteration_count, callback_latent, None, estimated_iterations)
+                                    callback(step_iteration_count, callback_latent, None, estimated_iterations*(len(timesteps)-1))
+
+                                step_iteration_count += 1
 
                                 # update latent
                                 if scheduler == "multitalk":
