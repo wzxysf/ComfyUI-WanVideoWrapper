@@ -1846,7 +1846,7 @@ class WanVideoSampler:
                     if transformer.in_dim not in [148, 48, 36, 32, 52]:
                         raise ValueError("Control signal only works with Fun-Control model")
                     image_cond = torch.zeros_like(noise).to(device) #fun control
-                    if transformer.in_dim == 52 or transformer.control_adapter is not None: #fun 2.2 control
+                    if transformer.in_dim in [148, 52] or transformer.control_adapter is not None: #fun 2.2 control
                         mask_latents = torch.tile(
                             torch.zeros_like(noise[:1]), [4, 1, 1, 1]
                         )
@@ -1860,7 +1860,7 @@ class WanVideoSampler:
                 control_start_percent = control_embeds.get("start_percent", 0.0)
                 control_end_percent = control_embeds.get("end_percent", 1.0)
             else:
-                if transformer.in_dim == 36: #fun inp
+                if transformer.in_dim in [148, 52]: #fun inp
                     mask_latents = torch.tile(
                         torch.zeros_like(noise[:1]), [4, 1, 1, 1]
                     )
