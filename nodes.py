@@ -3016,6 +3016,7 @@ class WanVideoSampler:
                             mode = transformer.multitalk_model_type.lower()
                         log.info(f"Multitalk mode: {mode}")
                         original_images = cond_image = image_embeds.get("multitalk_start_image", None)
+                        cond_frame = None
                         offload = image_embeds.get("force_offload", False)
                         tiled_vae = image_embeds.get("tiled_vae", False)
                         frame_num = clip_length = image_embeds.get("num_frames", 81)
@@ -3031,19 +3032,13 @@ class WanVideoSampler:
                         if len(multitalk_embeds['audio_features'])==2 and (multitalk_embeds['ref_target_masks'] is None):
                             face_scale = 0.1
                             x_min, x_max = int(target_h * face_scale), int(target_h * (1 - face_scale))
-                            background_mask = torch.zeros([target_h, target_w])
-                            background_mask = torch.zeros([target_h, target_w])
-                            human_mask1 = torch.zeros([target_h, target_w])
-                            human_mask2 = torch.zeros([target_h, target_w])
                             lefty_min, lefty_max = int((target_w//2) * face_scale), int((target_w//2) * (1 - face_scale))
                             righty_min, righty_max = int((target_w//2) * face_scale + (target_w//2)), int((target_w//2) * (1 - face_scale) + (target_w//2))
+                            human_mask1, human_mask2 = (torch.zeros([target_h, target_w]) for _ in range(2))
                             human_mask1[x_min:x_max, lefty_min:lefty_max] = 1
                             human_mask2[x_min:x_max, righty_min:righty_max] = 1
-                            background_mask += human_mask1
-                            background_mask += human_mask2
-                            human_masks = [human_mask1, human_mask2]
-                            background_mask = torch.where(background_mask > 0, torch.tensor(0), torch.tensor(1))
-                            human_masks.append(background_mask)
+                            background_mask = torch.where((human_mask1 + human_mask2) > 0, torch.tensor(0), torch.tensor(1))
+                            human_masks = [human_mask1, human_mask2, background_mask]
                             ref_target_masks = torch.stack(human_masks, dim=0)
                             multitalk_embeds['ref_target_masks'] = ref_target_masks
 
@@ -3084,7 +3079,7 @@ class WanVideoSampler:
                         while True: # start video generation iteratively
                             cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num-1) // 4)
                             if mode == "infinitetalk":
-                                cond_image = original_images[:, :, current_condframe_index:current_condframe_index+1]
+                                cond_image = original_images[:, :, current_condframe_index:current_condframe_index+1] if cond_image is not None else None
                             if multitalk_embeds is not None:
                                 audio_embs = []
                                 # split audio with window size
@@ -3112,7 +3107,7 @@ class WanVideoSampler:
                                 ).to(dtype)
                                 pcd_data['render_latent'] = render_latent
 
-                            h, w = cond_image.shape[-2], cond_image.shape[-1]
+                            h, w = cond_image.shape[-2], cond_image.shape[-1] if cond_image is not None else (target_h, target_w)
                             lat_h, lat_w = h // VAE_STRIDE[1], w // VAE_STRIDE[2]
                             seq_len = ((frame_num - 1) // VAE_STRIDE[0] + 1) * lat_h * lat_w // (PATCH_SIZE[1] * PATCH_SIZE[2])
 
@@ -3163,25 +3158,28 @@ class WanVideoSampler:
                             mm.soft_empty_cache()
 
                             # zero padding and vae encode
-                            video_frames = torch.zeros(1, cond_image.shape[1], frame_num-cond_image.shape[2], target_h, target_w, device=device, dtype=vae.dtype)
-                            padding_frames_pixels_values = torch.concat([cond_image.to(device, vae.dtype), video_frames], dim=2)
+                            if cond_image is not None or cond_frame is not None:
+                                video_frames = torch.zeros(1, cond_image.shape[1], frame_num-cond_image.shape[2], target_h, target_w, device=device, dtype=vae.dtype)
+                                padding_frames_pixels_values = torch.concat([cond_image.to(device, vae.dtype), video_frames], dim=2)
 
-                            # encode
-                            vae.to(device)
-                            y = vae.encode(padding_frames_pixels_values, device=device, tiled=tiled_vae, pbar=False).to(dtype)
+                                # encode
+                                vae.to(device)
+                                y = vae.encode(padding_frames_pixels_values, device=device, tiled=tiled_vae, pbar=False).to(dtype)
 
-                            if mode == "multitalk":
-                                latent_motion_frames = y[:, :, :cur_motion_frames_latent_num][0] # C T H W
-                            else:
-                                if is_first_clip:
-                                    latent_motion_frames = vae.encode(cond_image.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)
+                                if mode == "multitalk":
+                                    latent_motion_frames = y[:, :, :cur_motion_frames_latent_num][0] # C T H W
                                 else:
-                                    latent_motion_frames = vae.encode(cond_frame.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)
-                                latent_motion_frames = latent_motion_frames[0]
-                            vae.to(offload_device)
-
-                            y = torch.concat([msk, y], dim=1) # B 4+C T H W
-                            mm.soft_empty_cache()
+                                    if is_first_clip:
+                                        latent_motion_frames = vae.encode(cond_image.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)
+                                    else:
+                                        latent_motion_frames = vae.encode(cond_frame.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)
+                                    latent_motion_frames = latent_motion_frames[0]
+                                vae.to(offload_device)
+                                y = torch.concat([msk, y], dim=1).squeeze(0) # 4+C T H W
+                                mm.soft_empty_cache()
+                            else:
+                                y = None
+                                latent_motion_frames = noise[:, :1]
 
                             if scheduler == "multitalk":
                                 timesteps = list(np.linspace(1000, 1, steps, dtype=np.float32))
@@ -3261,6 +3259,14 @@ class WanVideoSampler:
                                 elif model["manual_offloading"]:
                                     transformer.to(device)
 
+                            # Use the appropriate prompt for this section
+                            if len(text_embeds["prompt_embeds"]) > 1:
+                                prompt_index = min(iteration_count, len(text_embeds["prompt_embeds"]) - 1)
+                                positive = [text_embeds["prompt_embeds"][prompt_index]]
+                                log.info(f"Using prompt index: {prompt_index}")
+                            else:
+                                positive = text_embeds["prompt_embeds"]
+
                             sampling_pbar = tqdm(total=len(timesteps)-1, desc=f"Sampling audio indices {audio_start_idx}-{audio_end_idx}", position=0, leave=True)
                             for i in range(len(timesteps)-1):
                                 timestep = timesteps[i]
@@ -3271,9 +3277,9 @@ class WanVideoSampler:
                                 noise_pred, self.cache_state = predict_with_cfg(
                                     latent_model_input, 
                                     cfg[idx], 
-                                    text_embeds["prompt_embeds"], 
+                                    positive, 
                                     text_embeds["negative_prompt_embeds"], 
-                                    timestep, idx, y.squeeze(0), clip_embeds, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
+                                    timestep, idx, y, clip_embeds, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                                     cache_state=self.cache_state, multitalk_audio_embeds=audio_embs)
 
                                 sampling_pbar.update(1)
