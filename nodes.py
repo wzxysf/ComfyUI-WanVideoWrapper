@@ -3107,7 +3107,7 @@ class WanVideoSampler:
                                 ).to(dtype)
                                 pcd_data['render_latent'] = render_latent
 
-                            h, w = cond_image.shape[-2], cond_image.shape[-1] if cond_image is not None else (target_h, target_w)
+                            h, w = (cond_image.shape[-2], cond_image.shape[-1]) if cond_image is not None else (target_h, target_w)
                             lat_h, lat_w = h // VAE_STRIDE[1], w // VAE_STRIDE[2]
                             seq_len = ((frame_num - 1) // VAE_STRIDE[0] + 1) * lat_h * lat_w // (PATCH_SIZE[1] * PATCH_SIZE[2])
 
