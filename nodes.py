@@ -2033,7 +2033,7 @@ class WanVideoSampler:
             context = get_context_scheduler(context_schedule)
 
         # vid2vid
-        noise_mask=None
+        noise_mask=original_image=None
         if samples is not None and not multitalk_sampling:
             saved_generator_state = samples.get("generator_state", None)
             if saved_generator_state is not None:
