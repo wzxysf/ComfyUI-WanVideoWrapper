@@ -2051,7 +2051,9 @@ class WanVideoSampler:
             noise_mask = samples.get("noise_mask", None)
             if noise_mask is not None:
                 log.info(f"Latent noise_mask shape: {noise_mask.shape}")
-                original_image = input_samples.to(device)
+                original_image = samples.get("original_image", None)
+                if original_image is None:
+                    original_image = input_samples
                 if len(noise_mask.shape) == 4:
                     noise_mask = noise_mask.squeeze(1)
                 if noise_mask.shape[0] < noise.shape[1]:
@@ -3329,7 +3331,7 @@ class WanVideoSampler:
                                 # differential diffusion inpaint
                                 if masks is not None:
                                     if i < len(timesteps) - 1:
-                                        image_latent = add_noise(original_image, noise.to(device), timesteps[i+1])
+                                        image_latent = add_noise(original_image.to(device), noise.to(device), timesteps[i+1])
                                         mask = masks[i].to(latent)
                                         latent = image_latent * mask + latent * (1-mask)
 
@@ -3510,7 +3512,7 @@ class WanVideoSampler:
                             if idx < len(timesteps) - 1:
                                 noise_timestep = timesteps[idx+1]
                                 image_latent = sample_scheduler.scale_noise(
-                                    original_image, torch.tensor([noise_timestep]), noise.to(device)
+                                    original_image.to(device), torch.tensor([noise_timestep]), noise.to(device)
                                 )
                                 mask = masks[idx].to(latent)
                                 latent = image_latent * mask + latent * (1-mask)
@@ -3565,6 +3567,7 @@ class WanVideoSampler:
             "has_ref": has_ref, 
             "drop_last": drop_last,
             "generator_state": seed_g.get_state(),
+            "original_image": original_image.cpu() if original_image is not None else None
         },{
             "samples": callback_latent.unsqueeze(0).cpu() if callback is not None else None, 
         })
