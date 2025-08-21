@@ -16,7 +16,7 @@ from .utils import(log, print_memory, apply_lora, clip_encode_image_tiled, fouri
                    add_noise_to_reference_video, optimized_scale, setup_radial_attention, 
                    compile_model, dict_to_device, tangential_projection, set_module_tensor_to_device, get_raag_guidance)
 from .cache_methods.cache_methods import cache_report
-from .nodes_model_loading import load_weights, load_weights_gguf
+from .nodes_model_loading import load_weights
 from .enhance_a_video.globals import set_enhance_weight, set_num_frames
 from .taehv import TAEHV
 from contextlib import nullcontext
@@ -42,18 +42,18 @@ def offload_transformer(transformer):
     transformer.teacache_state.clear_all()
     transformer.magcache_state.clear_all()
     transformer.easycache_state.clear_all()
-    transformer.to(offload_device)
-    # for name, param in transformer.named_parameters():
-    #     module = transformer
-    #     subnames = name.split('.')
-    #     for subname in subnames[:-1]:
-    #         module = getattr(module, subname)
-    #     attr_name = subnames[-1]
-    #     if param.data.is_floating_point():
-    #         meta_param = torch.nn.Parameter(torch.empty_like(param.data, device='meta'), requires_grad=False)
-    #         setattr(module, attr_name, meta_param)
-    #     else:
-    #         pass
+    #transformer.to(offload_device)
+    for name, param in transformer.named_parameters():
+        module = transformer
+        subnames = name.split('.')
+        for subname in subnames[:-1]:
+            module = getattr(module, subname)
+        attr_name = subnames[-1]
+        if param.data.is_floating_point():
+            meta_param = torch.nn.Parameter(torch.empty_like(param.data, device='meta'), requires_grad=False)
+            setattr(module, attr_name, meta_param)
+        else:
+            pass
     mm.soft_empty_cache()
     gc.collect()
 
@@ -1655,11 +1655,12 @@ class WanVideoSampler:
         vae_upscale_factor = 16 if is_5b else 8
 
         if transformer.patched_linear and gguf_reader is None:
-            load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, dtype, device, block_swap_args=block_swap_args)
+            load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
 
         if gguf_reader is not None:
-            load_weights_gguf(transformer, gguf_reader, patcher.model["sd"], dtype, device, patcher)
+            load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
             set_lora_params_gguf(transformer, patcher.patches)
+            transformer.patched_linear = True
         elif len(patcher.patches) != 0 and transformer.patched_linear:
             log.info(f"Using {len(patcher.patches)} LoRA weight patches for WanVideo model")
             if not merge_loras and fp8_matmul:

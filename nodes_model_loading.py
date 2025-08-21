@@ -18,6 +18,11 @@ import comfy.model_management as mm
 from comfy.utils import load_torch_file, ProgressBar
 import comfy.model_base
 from comfy.sd import load_lora_for_models
+try:
+    from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
+    from gguf import GGMLQuantizationType
+except:
+    pass
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -724,15 +729,58 @@ class WanVideoSetLoRAs:
 
         return (patcher,)
 
-def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device, block_swap_args=None):
-    params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio_proj"}       
-    
-    log.info("Using accelerate to load and assign model weights to device...")
+def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
+                 transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
+    params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio_proj"}
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     cnt = 0
-    for name, param in tqdm(transformer.named_parameters(),
-            desc=f"Loading transformer parameters to {transformer_load_device}", 
+    block_idx = vace_block_idx = None
+
+    if gguf:
+        log.info("Using GGUF to load and assign model weights to device...")
+
+        # Prepare sd from GGUF readers
+        sd = {}
+        all_tensors = []
+        for r in reader:
+            all_tensors.extend(r.tensors)
+        for tensor in all_tensors:
+            load_device = device
+            if "vace_blocks." in tensor.name:
+                try:
+                    vace_block_idx = int(tensor.name.split("vace_blocks.")[1].split(".")[0])
+                except Exception:
+                    vace_block_idx = None
+            elif "blocks." in tensor.name:
+                try:
+                    block_idx = int(tensor.name.split("blocks.")[1].split(".")[0])
+                except Exception:
+                    block_idx = None
+
+            if block_swap_args is not None:
+                if block_idx is not None:
+                    if block_idx >= len(transformer.blocks) - block_swap_args.get("blocks_to_swap", 0):
+                        load_device = offload_device
+                elif vace_block_idx is not None:
+                    if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args.get("vace_blocks_to_swap", 0):
+                        load_device = offload_device
+                        
+            is_gguf_quant = tensor.tensor_type not in [GGMLQuantizationType.F32, GGMLQuantizationType.F16]
+            weights = torch.from_numpy(tensor.data.copy()).to(load_device)
+            sd[tensor.name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
+
+        if not getattr(transformer, "gguf_patched", False):
+            transformer = _replace_with_gguf_linear(
+                transformer, base_dtype, sd, patches=patcher.patches
+            )
+            transformer.gguf_patched = True
+    else:
+        log.info("Using accelerate to load and assign model weights to device...")
+    named_params = transformer.named_parameters()
+
+    for name, param in tqdm(named_params,
+            desc=f"Loading transformer parameters to {transformer_load_device}",
             total=param_count,
             leave=True):
         block_idx = vace_block_idx = None
@@ -746,80 +794,39 @@ def load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_dev
                 block_idx = int(name.split("blocks.")[1].split(".")[0])
             except Exception:
                 block_idx = None
-        #print("block_idx:", block_idx)
-        #print("vace_block_idx:", vace_block_idx)
+
         if "loras" in name or "dwpose" in name or "randomref" in name:
             continue
-        dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
-        dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
-        if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
-            dtype_to_use = base_dtype
-        if "patch_embedding" in name:
-            dtype_to_use = torch.float32
+
+        # GGUF: skip GGUFParameter params
+        if gguf and isinstance(param, GGUFParameter):
+            continue
+
+        if gguf:
+            dtype_to_use = torch.float32 if "patch_embedding" in name else base_dtype
+        else:
+            dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
+            dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
+            if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
+                dtype_to_use = base_dtype
+            if "patch_embedding" in name:
+                dtype_to_use = torch.float32
 
         load_device = device
         if block_swap_args is not None:
             if block_idx is not None:
-                if block_idx >= len(transformer.blocks) - block_swap_args["blocks_to_swap"]:
+                if block_idx >= len(transformer.blocks) - block_swap_args.get("blocks_to_swap", 0):
                     load_device = offload_device
             elif vace_block_idx is not None:
-                if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args["vace_blocks_to_swap"]:
+                if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args.get("vace_blocks_to_swap", 0):
                     load_device = offload_device
+
+        # Set tensor to device
         set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=sd[name.replace("_orig_mod.", "")])
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
-    #for name, param in transformer.named_parameters():
-    #    print(name, param.dtype, param.device, param.shape)
-    #for name, param in transformer.blocks[0].motion_attn.named_parameters():
-    #    print(name, param.data)
-    pbar.update_absolute(param_count)
-    pbar.update_absolute(0)
 
-def load_weights_gguf(transformer, reader, sd, base_dtype, transformer_load_device, patcher):
-    from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
-    import gguf
-    log.info("Using GGUF to load and assign model weights to device...")
-
-    param_count = sum(1 for _ in transformer.named_parameters())
-
-    sd = {}
-
-    # Combine tensors from all readers
-    all_tensors = []
-    for r in reader:
-        all_tensors.extend(r.tensors)
-
-    for tensor in all_tensors:
-        # if the tensor is a torch supported dtype do not use GGUFParameter
-        is_gguf_quant = tensor.tensor_type not in [gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16]
-        weights = torch.from_numpy(tensor.data.copy()).to(transformer_load_device)
-        sd[tensor.name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
-
-    patcher.model.diffusion_model = _replace_with_gguf_linear(patcher.model.diffusion_model, base_dtype, sd, patches=patcher.patches)
-    pbar = ProgressBar(param_count)
-    cnt = 0
-    for name, param in tqdm(patcher.model.diffusion_model.named_parameters(), 
-            desc=f"Loading transformer parameters to {transformer_load_device}", 
-            total=param_count,
-            leave=True):
-        if "loras" in name:
-            continue
-        #print(name, param.dtype, param.device, param.shape)
-        if isinstance(param, GGUFParameter):
-            continue
-        elif "patch_embedding" in name:
-            dtype_to_use = torch.float32
-        else:
-            dtype_to_use = base_dtype
-        set_module_tensor_to_device(patcher.model.diffusion_model, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name.replace("_orig_mod.", "")])
-        cnt += 1
-        if cnt % 100 == 0:
-            pbar.update(100)
-
-    #for name, param in transformer.named_parameters():
-    #    print(name, param.dtype, param.device, param.shape)
-    #patcher.load(device, full_load=True)
     pbar.update_absolute(param_count)
     pbar.update_absolute(0)
 
