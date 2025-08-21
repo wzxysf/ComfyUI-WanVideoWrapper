@@ -780,10 +780,17 @@ def load_weights_gguf(transformer, reader, sd, base_dtype, transformer_load_devi
     from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
     import gguf
     log.info("Using GGUF to load and assign model weights to device...")
+
     param_count = sum(1 for _ in transformer.named_parameters())
 
     sd = {}
-    for tensor in reader.tensors:
+
+    # Combine tensors from all readers
+    all_tensors = []
+    for r in reader:
+        all_tensors.extend(r.tensors)
+
+    for tensor in all_tensors:
         # if the tensor is a torch supported dtype do not use GGUFParameter
         is_gguf_quant = tensor.tensor_type not in [gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16]
         weights = torch.from_numpy(tensor.data.copy()).to(transformer_load_device)
@@ -987,10 +994,10 @@ class WanVideoModelLoader:
         if not gguf:
             sd = load_torch_file(model_path, device=transformer_load_device, safe_load=True)
         else:
-            #from diffusers.models.model_loading_utils import load_gguf_checkpoint
-            #sd = load_gguf_checkpoint(model_path)
+            gguf_reader=[]
             from .gguf.gguf import load_gguf
-            sd, gguf_reader = load_gguf(model_path)
+            sd, reader = load_gguf(model_path)
+            gguf_reader.append(reader)
 
         if quantization == "disabled":
             for k, v in sd.items():
@@ -1021,9 +1028,10 @@ class WanVideoModelLoader:
 
         if extra_model is not None:
             if gguf:
-                if not vace_model["path"].endswith(".gguf"):
-                    raise ValueError("With GGUF main model the VACE module must also be a GGUF quantized, if the main model already has VACE included, you can disconnect the VACE module loader")
-                vace_sd = load_gguf_checkpoint(vace_model["path"])
+                if not extra_model["path"].endswith(".gguf"):
+                    raise ValueError("With GGUF main model the extra model must also be a GGUF quantized, if the main model already has extra included, you can disconnect the extra module loader")
+                extra_sd, extra_reader = load_gguf(extra_model["path"])
+                gguf_reader.append(extra_reader)
             else:
                 extra_sd = load_torch_file(extra_model["path"], device=transformer_load_device, safe_load=True)
             sd.update(extra_sd)
