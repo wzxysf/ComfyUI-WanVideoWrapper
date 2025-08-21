@@ -52,7 +52,8 @@ class MultiTalkModelLoader:
         multitalk = {
             "proj_model": multitalk_proj_model,
             "sd": sd,
-            "is_gguf": model_path.endswith(".gguf")
+            "is_gguf": model_path.endswith(".gguf"),
+            "model_type": "InfiniteTalk" if "infinite" in model.lower() else "MultiTalk",
         }
 
         return (multitalk,)
@@ -75,8 +76,8 @@ class MultiTalkWav2VecEmbeds:
         return {"required": {
             "wav2vec_model": ("WAV2VECMODEL",),
             "audio_1": ("AUDIO",),
-            "normalize_loudness": ("BOOLEAN", {"default": True}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1}),
+            "normalize_loudness": ("BOOLEAN", {"default": True, "tooltip": "Normalize the audio loudness to -23 LUFS"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1, "tooltip": "The total frame count to generate."}),
             "fps": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 60.0, "step": 0.1}),
             "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1, "tooltip": "Strength of the audio conditioning"}),
             "audio_cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1, "tooltip": "When not 1.0, an extra model pass without audio conditioning is done: slower inference but more motion is allowed"}),
@@ -90,8 +91,8 @@ class MultiTalkWav2VecEmbeds:
             }
         }
 
-    RETURN_TYPES = ("MULTITALK_EMBEDS", "AUDIO", )
-    RETURN_NAMES = ("multitalk_embeds", "audio", )
+    RETURN_TYPES = ("MULTITALK_EMBEDS", "AUDIO", "INT", )
+    RETURN_NAMES = ("multitalk_embeds", "audio", "num_frames", )
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
 
@@ -230,12 +231,30 @@ class MultiTalkWav2VecEmbeds:
                     offset += w.shape[-1]
                 out_audio = {"waveform": mixed, "sample_rate": sr}
 
+        # Calculate actual frames based on audio duration
+        actual_num_frames = num_frames
+        if len(audio_outputs) > 0:
+            if multi_audio_type == "para":
+                # For parallel mode, use the longest audio duration
+                max_audio_duration = max([ao["waveform"].shape[-1] / sr for ao in audio_outputs])
+                actual_frames_from_audio = int(max_audio_duration * fps)
+            else:  # "add"
+                # For sequential mode, use the total audio duration
+                total_audio_duration = sum([ao["waveform"].shape[-1] / sr for ao in audio_outputs])
+                actual_frames_from_audio = int(total_audio_duration * fps)
+            
+            # Use the smaller of requested frames or actual audio frames
+            actual_num_frames = min(num_frames, actual_frames_from_audio)
+            
+            if actual_frames_from_audio < num_frames:
+                log.info(f"[MultiTalk] Audio duration ({actual_frames_from_audio} frames) is shorter than requested ({num_frames} frames). Using {actual_num_frames} frames.")
+
         # Debug: log final mixed audio length and mode
         total_samples_raw = sum([ao["waveform"].shape[-1] for ao in audio_outputs])
         log.info(f"[MultiTalk] total raw duration = {total_samples_raw/sr:.3f}s")
         log.info(f"[MultiTalk] multi_audio_type={multi_audio_type} | final waveform shape={out_audio['waveform'].shape} | length={out_audio['waveform'].shape[-1]} samples | seconds={out_audio['waveform'].shape[-1]/sr:.3f}s (expected {'sum' if multi_audio_type=='add' else 'max'} of raw)")
 
-        return (multitalk_embeds, out_audio)
+        return (multitalk_embeds, out_audio, actual_num_frames)
 
 
 class WanVideoImageToVideoMultiTalk:
@@ -243,11 +262,11 @@ class WanVideoImageToVideoMultiTalk:
     def INPUT_TYPES(s):
         return {"required": {
             "vae": ("WANVAE",),
-            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the image to encode"}),
-            "frame_window_size": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
-            "motion_frame": ("INT", {"default": 25, "min": 1, "max": 10000, "step": 1, "tooltip": "Driven frame length used in the long video generation."}),
-            "force_offload": ("BOOLEAN", {"default": True}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the generation"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the generation"}),
+            "frame_window_size": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "The number of frames to process at once, should be a value the model is generally good at."}),
+            "motion_frame": ("INT", {"default": 25, "min": 1, "max": 10000, "step": 1, "tooltip": "Driven frame length used in the long video generation. Basically the overlap length."}),
+            "force_offload": ("BOOLEAN", {"default": False, "tooltip": "Whether to force offload the model within the loop for VAE operations, enable if you encounter memory issues."}),
             "colormatch": (
             [   
                 'disabled',
@@ -258,17 +277,18 @@ class WanVideoImageToVideoMultiTalk:
                 'hm-mvgd-hm', 
                 'hm-mkl-hm',
             ], {
-               "default": 'disabled'
-            }),
+               "default": 'disabled', "tooltip": "Color matching method to use between the windows"
+            },),
             },
             "optional": {
-                "start_image": ("IMAGE", {"tooltip": "Image to encode"}),
+                "start_image": ("IMAGE", {"tooltip": "Images to encode"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
                 "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
                 "mode": ([
+                    "auto",
                     "multitalk",
                     "infinitetalk"
-                ], {"default": "multitalk", "tooltip": "The sampling strategy to use in the long video generation loop, should match the model used"})
+                ], {"default": "auto", "tooltip": "The sampling strategy to use in the long video generation loop, should match the model used"})
             }
         }
 
@@ -276,6 +296,7 @@ class WanVideoImageToVideoMultiTalk:
     RETURN_NAMES = ("image_embeds",)
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Enables Multi/InfiniteTalk long video generation sampling method, the video is created in windows with overlapping frames. Not compatible or necessary to be used with context windows and many other features besides Multi/InfiniteTalk."
 
     def process(self, vae, width, height, frame_window_size, motion_frame, force_offload, colormatch, start_image=None, tiled_vae=False, clip_embeds=None, mode="multitalk"):
 
@@ -320,7 +341,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MultiTalkModelLoader": "MultiTalk Model Loader",
-    "MultiTalkWav2VecEmbeds": "MultiTalk Wav2Vec Embeds",
-    "WanVideoImageToVideoMultiTalk": "WanVideo Image To Video MultiTalk"
+    "MultiTalkModelLoader": "Multi/InfiniteTalk Model Loader",
+    "MultiTalkWav2VecEmbeds": "Multi/InfiniteTalk Wav2Vec Embeds",
+    "WanVideoImageToVideoMultiTalk": "WanVideo Long I2V Multi/InfiniteTalk"
 }

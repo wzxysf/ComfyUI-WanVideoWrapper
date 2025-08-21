@@ -503,7 +503,7 @@ class WanVideoVACEModelSelect:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "vace_model": (folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' VACE model to use when not using model that has it included"}),
+                "vace_model": (folder_paths.get_filename_list("unet_gguf") + folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' VACE model to use when not using model that has it included"}),
             },
         }
 
@@ -1021,15 +1021,9 @@ class WanVideoModelLoader:
 
         if extra_model is not None:
             if gguf:
-                if not extra_model["path"].endswith(".gguf"):
-                    raise ValueError("With GGUF main model the extra model must also be a GGUF quantized, if the main model already has extra included, you can disconnect the extra model loader")
-                from diffusers.models.model_loading_utils import load_gguf_checkpoint
-                extra_sd = load_gguf_checkpoint(extra_model["path"])
-                new_keys = {}
-                for k, v in extra_sd.items():
-                    if "vace" in k:
-                        new_keys[k] = v
-                extra_sd = new_keys
+                if not vace_model["path"].endswith(".gguf"):
+                    raise ValueError("With GGUF main model the VACE module must also be a GGUF quantized, if the main model already has VACE included, you can disconnect the VACE module loader")
+                vace_sd = load_gguf_checkpoint(vace_model["path"])
             else:
                 extra_sd = load_torch_file(extra_model["path"], device=transformer_load_device, safe_load=True)
             sd.update(extra_sd)
@@ -1209,6 +1203,7 @@ class WanVideoModelLoader:
         if multitalk_model is not None:
             if multitalk_model["is_gguf"] and not gguf:
                 raise ValueError("Multitalk/InfiniteTalk model is a GGUF model, main model also has to be a GGUF model.")
+            multitalk_model_type = multitalk_model.get("model_type", "MultiTalk")
             # init audio module
             from .multitalk.multitalk import SingleStreamMultiAttention
             from .wanvideo.modules.model import WanRMSNorm, WanLayerNorm
@@ -1228,8 +1223,9 @@ class WanVideoModelLoader:
                         attention_mode=attention_mode,
                     )
                 block.norm_x = WanLayerNorm(dim, transformer.eps, elementwise_affine=True) if norm_input_visual else nn.Identity()
-            log.info("MultiTalk model detected, patching model...")
+            log.info(f"{multitalk_model_type} detected, patching model...")
             transformer.audio_proj = multitalk_model["proj_model"]
+            transformer.multitalk_model_type = multitalk_model_type
             sd.update(multitalk_model["sd"])
         
         # Additional cond latents
