@@ -2054,19 +2054,15 @@ class WanVideoSampler:
                 original_image = input_samples.to(device)
                 if len(noise_mask.shape) == 4:
                     noise_mask = noise_mask.squeeze(1)
+                if noise_mask.shape[0] < noise.shape[1]:
+                    noise_mask = noise_mask.repeat(noise.shape[1] // noise_mask.shape[0], 1, 1)
 
                 noise_mask = torch.nn.functional.interpolate(
                     noise_mask.unsqueeze(0).unsqueeze(0),  # Add batch and channel dims [1,1,T,H,W]
                     size=(noise.shape[1], noise.shape[2], noise.shape[3]),
                     mode='trilinear',
                     align_corners=False
-                ).squeeze(0)  # Remove batch dim, keep channel dim
-            
-                # Add batch & channel dims for final output
-                noise_mask = noise_mask.unsqueeze(0).repeat(1, noise.shape[0], 1, 1, 1)
-
-                if noise_mask.shape[2] != noise.shape[1]:
-                    noise_mask = torch.cat([torch.zeros(1, noise.shape[0], noise.shape[1] - noise_mask.shape[2], noise.shape[2], noise.shape[3]), noise_mask], dim=2)
+                ).repeat(1, noise.shape[0], 1, 1, 1)
         
         # extra latents (Pusa) and 5b
         latents_to_insert = add_index = None
@@ -2626,16 +2622,13 @@ class WanVideoSampler:
         # diff diff prep
         masks = None
         if not multitalk_sampling and samples is not None and noise_mask is not None:
-            noise_mask = 1 - noise_mask
             thresholds = torch.arange(len(timesteps), dtype=original_image.dtype) / len(timesteps)
-            thresholds = thresholds.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)
-            masks = noise_mask.repeat(len(timesteps), 1, 1, 1, 1).to(device) 
-            masks = masks > thresholds
+            thresholds = thresholds.reshape(-1, 1, 1, 1, 1).to(device)
+            masks = (1-noise_mask.repeat(len(timesteps), 1, 1, 1, 1).to(device)) > thresholds
 
         latent_shift_loop = False
         if loop_args is not None:
-            latent_shift_loop = True
-            is_looped = True
+            latent_shift_loop = is_looped = True
             latent_skip = loop_args["shift_skip"]
             latent_shift_start_percent = loop_args["start_percent"]
             latent_shift_end_percent = loop_args["end_percent"]
@@ -3125,6 +3118,8 @@ class WanVideoSampler:
                                     last_frame = input_samples[:, -1:].repeat(1, pad_length, 1, 1)
                                     input_samples = torch.cat([input_samples, last_frame], dim=1)
                                 input_samples = input_samples[:, latent_start_idx:latent_end_idx]
+                                if noise_mask is not None:
+                                    original_image = input_samples.to(device)
 
                                 assert input_samples.shape[1] == noise.shape[1], f"Slice mismatch: {input_samples.shape[1]} vs {noise.shape[1]}"
                                 
@@ -3135,13 +3130,24 @@ class WanVideoSampler:
                                     noise = input_samples
 
                                 # diff diff prep
-                                masks = None
+                                noise_mask = samples.get("noise_mask", None)
                                 if noise_mask is not None:
-                                    noise_mask = 1 - noise_mask
+                                    if len(noise_mask.shape) == 4:
+                                        noise_mask = noise_mask.squeeze(1)
+                                    if noise_mask.shape[0] < noise.shape[1]:
+                                        noise_mask = noise_mask.repeat(noise.shape[1] // noise_mask.shape[0], 1, 1)
+                                    else:
+                                        noise_mask = noise_mask[latent_start_idx:latent_end_idx]
+                                    noise_mask = torch.nn.functional.interpolate(
+                                        noise_mask.unsqueeze(0).unsqueeze(0),  # Add batch and channel dims [1,1,T,H,W]
+                                        size=(noise.shape[1], noise.shape[2], noise.shape[3]),
+                                        mode='trilinear',
+                                        align_corners=False
+                                    ).repeat(1, noise.shape[0], 1, 1, 1)
+
                                     thresholds = torch.arange(len(timesteps), dtype=original_image.dtype) / len(timesteps)
-                                    thresholds = thresholds.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)
-                                    masks = noise_mask.repeat(len(timesteps), 1, 1, 1, 1).to(device) 
-                                    masks = masks > thresholds
+                                    thresholds = thresholds.reshape(-1, 1, 1, 1, 1).to(device)
+                                    masks = (1-noise_mask.repeat(len(timesteps), 1, 1, 1, 1).to(device)) > thresholds
 
                             window_vace_data = None
                             if vace_data is not None:
@@ -3292,10 +3298,10 @@ class WanVideoSampler:
 
                                 noise_pred, self.cache_state = predict_with_cfg(
                                     latent_model_input, 
-                                    cfg[idx], 
+                                    cfg[i], 
                                     positive, 
                                     text_embeds["negative_prompt_embeds"], 
-                                    timestep, idx, y, clip_embeds, control_latents, window_vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
+                                    timestep, i, y, clip_embeds, control_latents, window_vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                                     cache_state=self.cache_state, multitalk_audio_embeds=audio_embs)
 
                                 sampling_pbar.update(1)
@@ -3309,8 +3315,7 @@ class WanVideoSampler:
                                 # update latent
                                 if scheduler == "multitalk":
                                     noise_pred = -noise_pred
-                                    dt = timesteps[i] - timesteps[i + 1]
-                                    dt = dt / 1000
+                                    dt = (timesteps[i] - timesteps[i + 1]) / 1000
                                     latent = latent + noise_pred * dt[:, None, None, None]
                                 else:
                                     latent = latent.to(intermediate_device)
@@ -3323,12 +3328,9 @@ class WanVideoSampler:
                                 
                                 # differential diffusion inpaint
                                 if masks is not None:
-                                    if idx < len(timesteps) - 1:
-                                        noise_timestep = timesteps[idx+1]
-                                        image_latent = sample_scheduler.scale_noise(
-                                            original_image, torch.tensor([noise_timestep]), noise.to(device)
-                                        )
-                                        mask = masks[idx].to(latent)
+                                    if i < len(timesteps) - 1:
+                                        image_latent = add_noise(original_image, noise.to(device), timesteps[i+1])
+                                        mask = masks[i].to(latent)
                                         latent = image_latent * mask + latent * (1-mask)
 
                                 # injecting motion frames
