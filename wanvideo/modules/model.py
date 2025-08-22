@@ -104,10 +104,7 @@ def rope_riflex(pos, dim, i, theta, L_test, k, ntk_factor=1.0):
         device = pos.device
 
     if ntk_factor != 1.0:
-        print("scaling the theta with", ntk_factor)
-        
         theta *= ntk_factor
-        print("theta", theta)
 
     scale = torch.linspace(0, (dim - 2) / dim, steps=dim//2, dtype=torch.float64, device=device)
     omega = 1.0 / (theta**scale)
