@@ -3325,11 +3325,8 @@ class WanVideoSampler:
 
                             partial_unianim_data = None
                             if unianim_data is not None:
-                                print(dwpose_data.shape)
                                 partial_dwpose = dwpose_data[:, :, latent_start_idx:latent_end_idx]
-                                print("partial_dwpose shape:", partial_dwpose.shape)
                                 partial_dwpose_flat=rearrange(partial_dwpose, 'b c f h w -> b (f h w) c')
-                                print("partial_dwpose_flat shape:", partial_dwpose_flat.shape)
                                 partial_unianim_data = {
                                     "dwpose": partial_dwpose_flat,
                                     "random_ref": unianim_data["random_ref"],
