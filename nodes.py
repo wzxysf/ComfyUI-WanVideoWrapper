@@ -3223,6 +3223,7 @@ class WanVideoSampler:
                                 else:
                                     cond_ = cond_image if is_first_clip else cond_frame
                                     latent_motion_frames = vae.encode(cond_.to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False).to(dtype)[0]
+                                vae.model.clear_cache()
                                 vae.to(offload_device)
                                 y = torch.concat([msk, y], dim=1).squeeze(0) # 4+C T H W
                                 mm.soft_empty_cache()
@@ -3377,6 +3378,7 @@ class WanVideoSampler:
                                 transformer.to(offload_device)
                             vae.to(device)
                             videos = vae.decode(latent.unsqueeze(0).to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False)[0].cpu()
+                            vae.model.clear_cache()
                             vae.to(offload_device)
 
                             sampling_pbar.close()
