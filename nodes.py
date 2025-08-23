@@ -3877,7 +3877,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoScheduler": WanVideoScheduler,
     "WanVideoAddStandInLatent": WanVideoAddStandInLatent,
     "WanVideoAddControlEmbeds": WanVideoAddControlEmbeds,
-    "WanVideoAddMTVMotion": WanVideoAddMTVMotion,,
+    "WanVideoAddMTVMotion": WanVideoAddMTVMotion,
     "WanVideoRoPEFunction": WanVideoRoPEFunction
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
