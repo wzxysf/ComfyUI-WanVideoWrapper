@@ -1,9 +1,14 @@
-
+import torch
 import torch.nn as nn
+import os, copy, math
+import numpy as np
+from tqdm import tqdm
+
 from ..utils import log
+
 import comfy.model_management as mm
 from comfy.utils import ProgressBar
-from tqdm import tqdm
+
 
 def update_transformer(transformer, state_dict):
     
@@ -55,14 +60,6 @@ def update_transformer(transformer, state_dict):
 # 2nd Edited by https://github.com/Hzzone/pytorch-openpose
 # 3rd Edited by ControlNet
 # 4th Edited by ControlNet (added face and correct hands)
-
-import os
-import torch
-import numpy as np
-import copy
-import torch
-import numpy as np
-import math
 
 from .dwpose.wholebody import Wholebody
 
@@ -772,10 +769,14 @@ class WanVideoUniAnimateDWPoseDetector:
             ref = reference_pose_image
             ref_np = ref.cpu().numpy() * 255
 
+        prev_fuser_state = torch._C._jit_texpr_fuser_enabled()
+        torch._C._jit_set_texpr_fuser_enabled(False) # removes warmup delay, may want to enable later
         poses, reference_pose = pose_extract(pose_np, ref_np, self.dwpose_detector, height, width, score_threshold, stick_width=stick_width,
                                              draw_body=draw_body, body_keypoint_size=body_keypoint_size, draw_feet=draw_feet, 
                                              draw_hands=draw_hands, hand_keypoint_size=hand_keypoint_size, handle_not_detected=handle_not_detected, draw_head=draw_head)
         poses = poses / 255.0
+        torch._C._jit_set_texpr_fuser_enabled(prev_fuser_state)
+        
         if reference_pose_image is not None:
             reference_pose = reference_pose.unsqueeze(0) / 255.0
         else:
