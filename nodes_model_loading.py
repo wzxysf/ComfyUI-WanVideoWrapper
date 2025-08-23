@@ -1017,7 +1017,7 @@ class WanVideoModelLoader:
             multitalk_model_type = multitalk_model.get("model_type", "MultiTalk")
             # init audio module
             from .multitalk.multitalk import SingleStreamMultiAttention
-            from .wanvideo.modules.model import WanRMSNorm, WanLayerNorm
+            from .wanvideo.modules.model import WanLayerNorm
             norm_input_visual = True #dunno what this is
                
             for block in transformer.blocks:
@@ -1025,10 +1025,7 @@ class WanVideoModelLoader:
                         dim=dim,
                         encoder_hidden_states_dim=768,
                         num_heads=num_heads,
-                        qk_norm=False,
                         qkv_bias=True,
-                        eps=transformer.eps,
-                        norm_layer=WanRMSNorm,
                         class_range=24,
                         class_interval=4,
                         attention_mode=attention_mode,
