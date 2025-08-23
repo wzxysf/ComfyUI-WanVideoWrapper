@@ -1681,8 +1681,6 @@ class WanVideoSampler:
             start_step = steps - int(steps * denoise_strength) - 1
             add_noise_to_samples = True #for now to not break old workflows
 
-        first_sampler = (end_step != -1 or end_step >= steps)
-
         noise_pred_flipped = None
 
         if isinstance(cfg, list):
@@ -1692,7 +1690,7 @@ class WanVideoSampler:
         else:
             cfg = [cfg] * (steps + 1)
 
-        if first_sampler:
+        if end_step != -1:
             timesteps = timesteps[:end_step]
             sample_scheduler.sigmas = sample_scheduler.sigmas[:end_step+1]
             log.info(f"Sampling until step {end_step}, timestep: {timesteps[-1]}")
@@ -3247,7 +3245,7 @@ class WanVideoSampler:
                                     if start_step != 0:
                                         raise ValueError("start_step must be 0 when denoise_strength is used")
                                     start_step = steps - int(steps * denoise_strength) - 1
-                                if (end_step != -1 or end_step >= steps):
+                                if end_step != -1:
                                     timesteps = timesteps[:end_step]
                                     sample_scheduler.sigmas = sample_scheduler.sigmas[:end_step+1]
                                 if start_step > 0:
