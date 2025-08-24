@@ -1699,9 +1699,13 @@ class WanVideoSampler:
         noise_pred_flipped = None
 
         if isinstance(cfg, list):
-            if steps != len(cfg):
-                log.info(f"Received {len(cfg)} cfg values, but only {steps} steps. Setting cfg to match steps.")
+            if steps < len(cfg):
+                log.info(f"Received {len(cfg)} cfg values, but only {steps} steps. Slicing cfg list to match steps.")
                 cfg = cfg[:steps]
+            elif steps > len(cfg):
+                log.info(f"Received only {len(cfg)} cfg values, but {steps} steps. Extending cfg list to match steps.")
+                cfg.extend([cfg[-1]] * (steps - len(cfg)))
+            log.info(f"Using per-step cfg list: {cfg}")
         else:
             cfg = [cfg] * (steps + 1)
        
