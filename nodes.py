@@ -864,40 +864,55 @@ class WanVideoImageToVideoEncode:
 
         # Resize and rearrange the input image dimensions
         if start_image is not None:
-            resized_start_image = common_upscale(start_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
+            if start_image.shape[1] != H or start_image.shape[2] != W:
+                resized_start_image = common_upscale(start_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
+            else:
+                resized_start_image = start_image.permute(3, 0, 1, 2) # C, T, H, W
             resized_start_image = resized_start_image * 2 - 1
             if noise_aug_strength > 0.0:
                 resized_start_image = add_noise_to_reference_video(resized_start_image, ratio=noise_aug_strength)
         
         if end_image is not None:
-            resized_end_image = common_upscale(end_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
+            if end_image.shape[1] != H or end_image.shape[2] != W:
+                resized_end_image = common_upscale(end_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
+            else:
+                resized_end_image = end_image.permute(3, 0, 1, 2) # C, T, H, W
             resized_end_image = resized_end_image * 2 - 1
             if noise_aug_strength > 0.0:
                 resized_end_image = add_noise_to_reference_video(resized_end_image, ratio=noise_aug_strength)
             
         # Concatenate image with zero frames and encode
-        vae.to(device)
-
         if temporal_mask is None:
             if start_image is not None and end_image is None:
-                zero_frames = torch.zeros(3, num_frames-start_image.shape[0], H, W, device=device)
-                concatenated = torch.cat([resized_start_image.to(device), zero_frames], dim=1)
+                zero_frames = torch.zeros(3, num_frames-start_image.shape[0], H, W, device=device, dtype=vae.dtype)
+                concatenated = torch.cat([resized_start_image.to(device, dtype=vae.dtype), zero_frames], dim=1)
+                del resized_start_image, zero_frames
             elif start_image is None and end_image is not None:
-                zero_frames = torch.zeros(3, num_frames-end_image.shape[0], H, W, device=device)
-                concatenated = torch.cat([zero_frames, resized_end_image.to(device)], dim=1)
+                zero_frames = torch.zeros(3, num_frames-end_image.shape[0], H, W, device=device, dtype=vae.dtype)
+                concatenated = torch.cat([zero_frames, resized_end_image.to(device, dtype=vae.dtype)], dim=1)
+                del resized_end_image, zero_frames
             elif start_image is None and end_image is None:
-                concatenated = torch.zeros(3, num_frames, H, W, device=device)
+                concatenated = torch.zeros(3, num_frames, H, W, device=device, dtype=vae.dtype)
             else:
                 if fun_or_fl2v_model:
-                    zero_frames = torch.zeros(3, num_frames-(start_image.shape[0]+end_image.shape[0]), H, W, device=device)
+                    zero_frames = torch.zeros(3, num_frames-(start_image.shape[0]+end_image.shape[0]), H, W, device=device, dtype=vae.dtype)
                 else:
-                    zero_frames = torch.zeros(3, num_frames-1, H, W, device=device)
-                concatenated = torch.cat([resized_start_image.to(device), zero_frames, resized_end_image.to(device)], dim=1)
+                    zero_frames = torch.zeros(3, num_frames-1, H, W, device=device, dtype=vae.dtype)
+                concatenated = torch.cat([resized_start_image.to(device, dtype=vae.dtype), zero_frames, resized_end_image.to(device, dtype=vae.dtype)], dim=1)
+                del resized_start_image, resized_end_image, zero_frames
         else:
             temporal_mask = common_upscale(temporal_mask.unsqueeze(1), W, H, "nearest", "disabled").squeeze(1)
             concatenated = resized_start_image[:,:num_frames] * temporal_mask[:num_frames].unsqueeze(0)
+            del resized_start_image, temporal_mask
 
-        y = vae.encode([concatenated.to(device=device, dtype=vae.dtype)], device, end_=(end_image is not None and not fun_or_fl2v_model),tiled=tiled_vae)[0]
+        mm.soft_empty_cache()
+        gc.collect()
+
+        vae.to(device)
+        y = vae.encode([concatenated], device, end_=(end_image is not None and not fun_or_fl2v_model),tiled=tiled_vae)[0]
+        vae.model.clear_cache()
+        del concatenated
+
         has_ref = False
         if extra_latents is not None:
             samples = extra_latents["samples"].squeeze(0)
@@ -915,8 +930,7 @@ class WanVideoImageToVideoEncode:
 
         if add_cond_latents is not None:
             add_cond_latents["ref_latent_neg"] = vae.encode(torch.zeros(1, 3, 1, H, W, device=device, dtype=vae.dtype), device)
-
-        vae.model.clear_cache()
+        
         if force_offload:
             vae.model.to(offload_device)
             mm.soft_empty_cache()
