@@ -890,7 +890,7 @@ class WanVideoImageToVideoEncode:
             elif start_image is None and end_image is not None:
                 zero_frames = torch.zeros(3, num_frames-end_image.shape[0], H, W, device=device, dtype=vae.dtype)
                 concatenated = torch.cat([zero_frames, resized_end_image.to(device, dtype=vae.dtype)], dim=1)
-                del resized_end_image, zero_frames
+                del zero_frames
             elif start_image is None and end_image is None:
                 concatenated = torch.zeros(3, num_frames, H, W, device=device, dtype=vae.dtype)
             else:
@@ -899,7 +899,7 @@ class WanVideoImageToVideoEncode:
                 else:
                     zero_frames = torch.zeros(3, num_frames-1, H, W, device=device, dtype=vae.dtype)
                 concatenated = torch.cat([resized_start_image.to(device, dtype=vae.dtype), zero_frames, resized_end_image.to(device, dtype=vae.dtype)], dim=1)
-                del resized_start_image, resized_end_image, zero_frames
+                del resized_start_image, zero_frames
         else:
             temporal_mask = common_upscale(temporal_mask.unsqueeze(1), W, H, "nearest", "disabled").squeeze(1)
             concatenated = resized_start_image[:,:num_frames] * temporal_mask[:num_frames].unsqueeze(0)
