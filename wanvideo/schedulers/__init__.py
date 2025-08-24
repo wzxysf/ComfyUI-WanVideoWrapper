@@ -107,12 +107,31 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
         if start_step != 0:
             raise ValueError("start_step must be 0 when denoise_strength is used")
         start_step = steps - int(steps * denoise_strength) - 1
-    if end_step != -1:
-        timesteps = timesteps[:end_step]
-        sample_scheduler.sigmas = sample_scheduler.sigmas[:end_step+1]
-    if start_step > 0:
-        timesteps = timesteps[start_step:]
-        sample_scheduler.sigmas = sample_scheduler.sigmas[start_step:]
+
+    # Determine start and end indices for slicing
+    start_idx = 0
+    end_idx = len(timesteps) - 1
+
+    if isinstance(start_step, float):
+        idxs = (sample_scheduler.sigmas <= start_step).nonzero(as_tuple=True)[0]
+        if len(idxs) > 0:
+            start_idx = idxs[0].item()
+    elif isinstance(start_step, int):
+        if start_step > 0:
+            start_idx = start_step
+
+    if isinstance(end_step, float):
+        idxs = (sample_scheduler.sigmas >= end_step).nonzero(as_tuple=True)[0]
+        if len(idxs) > 0:
+            end_idx = idxs[-1].item()
+    elif isinstance(end_step, int):
+        if end_step != -1:
+            end_idx = end_step - 1
+
+    # Slice timesteps and sigmas once, based on indices
+    timesteps = timesteps[start_idx:end_idx+1]
+    sample_scheduler.sigmas = sample_scheduler.sigmas[start_idx:start_idx+len(timesteps)+1]  # always one longer
+    
 
     log.info(f"timesteps: {timesteps}")
     

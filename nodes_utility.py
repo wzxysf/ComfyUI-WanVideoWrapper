@@ -391,6 +391,23 @@ class WanVideoLatentReScale:
 
         return (samples,)
     
+class WanVideoSigmaToStep:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                "sigma": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.001}),
+            },
+        }
+
+    RETURN_TYPES = ("INT", )
+    RETURN_NAMES = ("step",)
+    FUNCTION = "convert"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Simply passes a float value as an integer, used to set start/end steps with sigma threshold"
+
+    def convert(self, sigma):
+        return (sigma,)
+    
 NODE_CLASS_MAPPINGS = {
     "WanVideoImageResizeToClosest": WanVideoImageResizeToClosest,
     "WanVideoVACEStartToEndFrame": WanVideoVACEStartToEndFrame,
@@ -398,8 +415,9 @@ NODE_CLASS_MAPPINGS = {
     "CreateCFGScheduleFloatList": CreateCFGScheduleFloatList,
     "DummyComfyWanModelObject": DummyComfyWanModelObject,
     "WanVideoLatentReScale": WanVideoLatentReScale,
-    "CreateScheduleFloatList": CreateScheduleFloatList
-    }
+    "CreateScheduleFloatList": CreateScheduleFloatList,
+    "WanVideoSigmaToStep": WanVideoSigmaToStep
+}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoImageResizeToClosest": "WanVideo Image Resize To Closest",
     "WanVideoVACEStartToEndFrame": "WanVideo VACE Start To End Frame",
@@ -407,5 +425,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CreateCFGScheduleFloatList": "Create CFG Schedule Float List",
     "DummyComfyWanModelObject": "Dummy Comfy Wan Model Object",
     "WanVideoLatentReScale": "WanVideo Latent ReScale",
-    "CreateScheduleFloatList": "Create Schedule Float List"
-    }
+    "CreateScheduleFloatList": "Create Schedule Float List",
+    "WanVideoSigmaToStep": "WanVideo Sigma To Step"
+}

@@ -1126,9 +1126,9 @@ class WanVideoControlEmbeds:
         return {"required": {
             "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the control signal"}),
             "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the control signal"}),
+            "latents": ("LATENT", {"tooltip": "Encoded latents to use as control signals"}),
             },
             "optional": {
-                "latents": ("LATENT", {"tooltip": "Encoded latents to use as control signals"}),
                 "fun_ref_image": ("LATENT", {"tooltip": "Reference latent for the Fun 1.1 -model"}),
             }
         }
@@ -1138,10 +1138,9 @@ class WanVideoControlEmbeds:
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
 
-    def process(self, start_percent, end_percent, fun_ref_image=None, latents=None):
-        if latents is not None:
-            samples = latents["samples"].squeeze(0)
-            C, T, H, W = samples.shape
+    def process(self, latents, start_percent, end_percent, fun_ref_image=None):
+        samples = latents["samples"].squeeze(0)
+        C, T, H, W = samples.shape
 
         num_frames = (T - 1) * 4 + 1
         seq_len = math.ceil((H * W) / 4 * ((num_frames - 1) // 4 + 1))
@@ -1329,18 +1328,20 @@ class WanVideoVACEEncode:
         else:
             assert len(frames) == len(ref_images)
 
+        pbar = ProgressBar(len(frames))
         if masks is None:
             latents = vae.encode(frames, device=device, tiled=tiled_vae)
         else:
             inactive = [i * (1 - m) + 0 * m for i, m in zip(frames, masks)]
             reactive = [i * m + 0 * (1 - m) for i, m in zip(frames, masks)]
+            del frames
             inactive = vae.encode(inactive, device=device, tiled=tiled_vae)
             reactive = vae.encode(reactive, device=device, tiled=tiled_vae)
             latents = [torch.cat((u, c), dim=0) for u, c in zip(inactive, reactive)]
+            del inactive, reactive
         vae.model.clear_cache()
+        
         cat_latents = []
-
-        pbar = ProgressBar(len(frames))
         for latent, refs in zip(latents, ref_images):
             if refs is not None:
                 if masks is None:
@@ -1544,7 +1545,7 @@ class WanVideoScheduler: #WIP
         return (scheduler,)
 
 rope_functions = ["default", "comfy", "comfy_chunked"]
-class WanVideoRoPEFunction: #WIP
+class WanVideoRoPEFunction:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
@@ -1699,8 +1700,8 @@ class WanVideoSampler:
 
         if isinstance(cfg, list):
             if steps != len(cfg):
-                log.info(f"Received {len(cfg)} cfg values, but only {steps} steps. Setting step count to match.")
-                steps = len(cfg)
+                log.info(f"Received {len(cfg)} cfg values, but only {steps} steps. Setting cfg to match steps.")
+                cfg = cfg[:steps]
         else:
             cfg = [cfg] * (steps + 1)
        
@@ -2194,19 +2195,32 @@ class WanVideoSampler:
             transformer.to(device)
 
         # Initialize Cache if enabled
+        previous_cache_states = None
         transformer.enable_teacache = transformer.enable_magcache = transformer.enable_easycache = False
         cache_args = teacache_args if teacache_args is not None else cache_args #for backward compatibility on old workflows
         if cache_args is not None:            
-           from .cache_methods.cache_methods import set_transformer_cache_method
-           transformer = set_transformer_cache_method(transformer, timesteps, cache_args)
+            from .cache_methods.cache_methods import set_transformer_cache_method
+            transformer = set_transformer_cache_method(transformer, timesteps, cache_args)
 
-        # Initialize cache state
-        self.cache_state = [None, None]
-        if phantom_latents is not None:
-            log.info(f"Phantom latents shape: {phantom_latents.shape}")
-            self.cache_state = [None, None, None]
-        self.cache_state_source = [None, None]
-        self.cache_states_context = []
+            # Initialize cache state
+            if samples is not None:
+                previous_cache_states = samples.get("cache_states", None)
+                print("Using previous cache states", previous_cache_states)
+                if previous_cache_states is not None:
+                    log.info("Using cache states from previous sampler")
+                    
+                    self.cache_state = previous_cache_states["cache_state"]
+                    transformer.easycache_state = previous_cache_states["easycache_state"]
+                    transformer.magcache_state = previous_cache_states["magcache_state"]
+                    transformer.teacache_state = previous_cache_states["teacache_state"]
+
+        if previous_cache_states is None:
+            self.cache_state = [None, None]
+            if phantom_latents is not None:
+                log.info(f"Phantom latents shape: {phantom_latents.shape}")
+                self.cache_state = [None, None, None]
+            self.cache_state_source = [None, None]
+            self.cache_states_context = []
 
         # Skip layer guidance (SLG)
         if slg_args is not None:
@@ -3549,9 +3563,17 @@ class WanVideoSampler:
 
         if phantom_latents is not None:
             latent = latent[:,:-phantom_latents.shape[1]]
-                
+        
+        cache_states = None
         if cache_args is not None:
             cache_report(transformer, cache_args)
+            if end_step != -1 and end_step < total_steps:
+                cache_states = {
+                    "cache_state": self.cache_state,
+                    "easycache_state": transformer.easycache_state,
+                    "teacache_state": transformer.teacache_state,
+                    "magcache_state": transformer.magcache_state,
+                }
 
         if force_offload:
             if model["manual_offloading"]:
@@ -3571,7 +3593,8 @@ class WanVideoSampler:
             "has_ref": has_ref, 
             "drop_last": drop_last,
             "generator_state": seed_g.get_state(),
-            "original_image": original_image.cpu() if original_image is not None else None
+            "original_image": original_image.cpu() if original_image is not None else None,
+            "cache_states": cache_states
         },{
             "samples": callback_latent.unsqueeze(0).cpu() if callback is not None else None, 
         })
@@ -3643,7 +3666,7 @@ class WanVideoDecode:
             images = images.permute(1, 2, 3, 0).cpu().float()
             return (images,)
         else:
-            if end_image is not None:
+            if end_image:
                 enable_vae_tiling = False
             images = vae.decode(latents, device=device, end_=(end_image is not None), tiled=enable_vae_tiling, tile_size=(tile_x//8, tile_y//8), tile_stride=(tile_stride_x//8, tile_stride_y//8))[0]
             vae.model.clear_cache()
@@ -3763,7 +3786,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoScheduler": WanVideoScheduler,
     "WanVideoAddStandInLatent": WanVideoAddStandInLatent,
     "WanVideoAddControlEmbeds": WanVideoAddControlEmbeds,
-    "WanVideoRoPEFunction": WanVideoRoPEFunction
+    "WanVideoRoPEFunction": WanVideoRoPEFunction,
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoSampler": "WanVideo Sampler",
@@ -3796,5 +3819,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoAddExtraLatent": "WanVideo Add Extra Latent",
     "WanVideoAddStandInLatent": "WanVideo Add StandIn Latent",
     "WanVideoAddControlEmbeds": "WanVideo Add Control Embeds",
-    "WanVideoRoPEFunction": "WanVideo RoPE Function"
+    "WanVideoRoPEFunction": "WanVideo RoPE Function",
     }
