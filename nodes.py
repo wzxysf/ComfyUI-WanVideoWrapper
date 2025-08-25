@@ -885,7 +885,7 @@ class WanVideoImageToVideoEncode:
 
         base_frames = num_frames + (1 if two_ref_images and not fun_or_fl2v_model else 0)
         if temporal_mask is None:
-            mask = torch.zeros(1, base_frames, lat_h, lat_w, device=device)
+            mask = torch.zeros(1, base_frames, lat_h, lat_w, device=device, dtype=vae.dtype)
             if start_image is not None:
                 mask[:, 0:start_image.shape[0]] = 1  # First frame
             if end_image is not None:
@@ -896,7 +896,7 @@ class WanVideoImageToVideoEncode:
                 mask = mask[:base_frames]
             elif mask.shape[0] < base_frames:
                 mask = torch.cat([mask, torch.zeros(base_frames - mask.shape[0], lat_h, lat_w, device=device)])
-            mask = mask.unsqueeze(0).to(device)
+            mask = mask.unsqueeze(0).to(device, vae.dtype)
 
         # Repeat first frame and optionally end frame
         start_mask_repeated = torch.repeat_interleave(mask[:, 0:1], repeats=4, dim=1) # T, C, H, W
@@ -952,7 +952,7 @@ class WanVideoImageToVideoEncode:
                 del resized_start_image, zero_frames
         else:
             temporal_mask = common_upscale(temporal_mask.unsqueeze(1), W, H, "nearest", "disabled").squeeze(1)
-            concatenated = resized_start_image[:,:num_frames] * temporal_mask[:num_frames].unsqueeze(0)
+            concatenated = resized_start_image[:,:num_frames].to(vae.dtype) * temporal_mask[:num_frames].unsqueeze(0).to(vae.dtype)
             del resized_start_image, temporal_mask
 
         mm.soft_empty_cache()
