@@ -1582,17 +1582,78 @@ class WanVideoScheduler: #WIP
     def INPUT_TYPES(s):
         return {"required": {
                 "scheduler": (scheduler_list, {"default": "unipc"}),
+                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Number of steps for the scheduler"}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
+                "start_step": ("INT", {"default": 0, "min": 0, "tooltip": "Starting step for the scheduler"}),
+                "end_step": ("INT", {"default": -1, "min": -1, "tooltip": "Ending step for the scheduler"})
+            },
+            "optional": {
+                "sigmas": ("SIGMAS", ),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
             },
         }
 
-    RETURN_TYPES = (scheduler_list, )
-    RETURN_NAMES = ("scheduler",)
+    RETURN_TYPES = ("SIGMAS", "INT", "FLOAT", scheduler_list, "INT", "INT",)
+    RETURN_NAMES = ("sigmas", "steps", "shift", "scheduler", "start_step", "end_step")
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
     EXPERIMENTAL = True
 
-    def process(self, scheduler):
-        return (scheduler,)
+    def process(self, scheduler, steps, start_step, end_step, shift, unique_id, sigmas=None):
+        sample_scheduler, timesteps = get_scheduler(
+            scheduler, 
+            steps, 
+            start_step, end_step, shift, 
+            device, 
+            sigmas=sigmas)
+        
+        scheduler_dict = {
+            "sample_scheduler": sample_scheduler,
+            "timesteps": timesteps,
+        }
+
+        try:
+            from server import PromptServer
+            import io
+            import base64
+            import matplotlib.pyplot as plt
+        except:
+            PromptServer = None
+        if unique_id and PromptServer is not None:
+            try:
+                # Plot sigmas and save to a buffer
+                sigmas_np = sample_scheduler.full_sigmas[:-1].cpu().numpy()
+                buf = io.BytesIO()
+                fig = plt.figure(facecolor='#353535')
+                ax = fig.add_subplot(111)
+                ax.set_facecolor('#353535')  # Set axes background color
+                ax.plot(sigmas_np)
+                ax.set_title("Sigmas", color='white')           # Title font color
+                ax.set_xlabel("Step", color='white')            # X label font color
+                ax.set_ylabel("Sigma Value", color='white')     # Y label font color
+                ax.tick_params(axis='x', colors='white')        # X tick color
+                ax.tick_params(axis='y', colors='white')        # Y tick color
+                # Add split point if end_step is defined
+                if end_step != -1 and 0 <= end_step < len(sigmas_np):
+                    ax.axvline(end_step, color='red', linestyle='--', linewidth=2, label='end_step split')
+                    ax.legend()
+                plt.tight_layout()
+                plt.savefig(buf, format='png')
+                plt.close(fig)
+                buf.seek(0)
+                img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                buf.close()
+
+                # Send as HTML img tag with base64 data
+                html_img = f"<img src='data:image/png;base64,{img_base64}' alt='Sigmas Plot' style='max-width:100%; height:100%; overflow:hidden; display:block;'>"
+                PromptServer.instance.send_progress_text(html_img, unique_id)
+            except Exception as e:
+                print("Failed to send sigmas plot:", e)
+                pass
+
+        return (sigmas, steps, shift, scheduler_dict, start_step, end_step)
 
 rope_functions = ["default", "comfy", "comfy_chunked"]
 class WanVideoRoPEFunction:
@@ -1744,8 +1805,11 @@ class WanVideoSampler:
 
         #region Scheduler
         sample_scheduler = None
-        if scheduler != "multitalk":
-            sample_scheduler, timesteps, scheduler_step_args = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas, seed_g=seed_g)
+        if isinstance(scheduler, dict):
+            sample_scheduler = scheduler["sample_scheduler"]
+            timesteps = scheduler["timesteps"]
+        elif scheduler != "multitalk":
+            sample_scheduler, timesteps = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
             log.info(f"sigmas: {sample_scheduler.sigmas}")
         else:
             timesteps = torch.tensor([1000, 750, 500, 250], device=device)
@@ -1761,7 +1825,11 @@ class WanVideoSampler:
             start_step = steps - int(steps * denoise_strength) - 1
             add_noise_to_samples = True #for now to not break old workflows
 
-        noise_pred_flipped = None
+        scheduler_step_args = {"generator": seed_g}
+        step_sig = inspect.signature(sample_scheduler.step)
+        for arg in list(scheduler_step_args.keys()):
+            if arg not in step_sig.parameters:
+                scheduler_step_args.pop(arg)
 
         if isinstance(cfg, list):
             if steps < len(cfg):
@@ -1778,7 +1846,7 @@ class WanVideoSampler:
         vace_data = vace_context = vace_scale = None
         fun_or_fl2v_model = has_ref = drop_last = False
         phantom_latents = fun_ref_image = ATI_tracks = None
-        add_cond = attn_cond = attn_cond_neg = None
+        add_cond = attn_cond = attn_cond_neg = noise_pred_flipped = None
 
         #I2V
         image_cond = image_embeds.get("image_embeds", None)
@@ -2792,7 +2860,7 @@ class WanVideoSampler:
             # FreeInit noise reinitialization (after first iteration)
             if freeinit_args is not None and iter_idx > 0:
                 # restart scheduler for each iteration
-                sample_scheduler, timesteps, scheduler_step_args = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas, seed_g=seed_g)
+                sample_scheduler, timesteps = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
 
                 # Re-apply start_step and end_step logic to timesteps and sigmas
                 if end_step != -1:
@@ -3310,7 +3378,7 @@ class WanVideoSampler:
                                 timesteps = [torch.tensor([t], device=device) for t in timesteps]
                                 timesteps = [timestep_transform(t, shift=shift, num_timesteps=1000) for t in timesteps]
                             else:
-                                sample_scheduler, timesteps, scheduler_step_args = get_scheduler(scheduler, total_steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas, seed_g=seed_g)
+                                sample_scheduler, timesteps = get_scheduler(scheduler, total_steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
                                 timesteps = [torch.tensor([float(t)], device=device) for t in timesteps] + [torch.tensor([0.], device=device)]
                             
                             # sample videos
