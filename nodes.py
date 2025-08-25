@@ -864,6 +864,7 @@ class WanVideoImageToVideoEncode:
 
         # Resize and rearrange the input image dimensions
         if start_image is not None:
+            start_image = start_image[..., :3]
             if start_image.shape[1] != H or start_image.shape[2] != W:
                 resized_start_image = common_upscale(start_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
             else:
@@ -873,6 +874,7 @@ class WanVideoImageToVideoEncode:
                 resized_start_image = add_noise_to_reference_video(resized_start_image, ratio=noise_aug_strength)
         
         if end_image is not None:
+            end_image = end_image[..., :3]
             if end_image.shape[1] != H or end_image.shape[2] != W:
                 resized_end_image = common_upscale(end_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
             else:
