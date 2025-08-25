@@ -8,14 +8,14 @@ import os
 import json
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
-folder_paths.add_model_folder_path("wav2vec", os.path.join(folder_paths.models_dir, "wav2vec"))
+folder_paths.add_model_folder_path("wav2vec2", os.path.join(folder_paths.models_dir, "wav2vec2"))
 
 class Wav2VecModelLoader:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": (folder_paths.get_filename_list("wav2vec"), {"tooltip": "These models are loaded from the 'ComfyUI/models/wav2vec' -folder",}),
+                "model": (folder_paths.get_filename_list("wav2vec2"), {"tooltip": "These models are loaded from the 'ComfyUI/models/wav2vec2' -folder",}),
                 "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
                 "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
@@ -41,11 +41,11 @@ class Wav2VecModelLoader:
         else:
             transfomer_load_device = device
 
-        config_path = os.path.join(script_directory, "wav2vec_config.json")
-        wav2vec_config = Wav2Vec2Config(**json.load(open(config_path)))
+        config_path = os.path.join(script_directory, "wav2vec2_config.json")
+        wav2vec2_config = Wav2Vec2Config(**json.load(open(config_path)))
 
         with init_empty_weights():
-            wav2vec = MultiTalkWav2Vec2Model(wav2vec_config).eval()
+            wav2vec2 = MultiTalkWav2Vec2Model(wav2vec2_config).eval()
 
         feature_extractor_config = {
             "do_normalize": False,
@@ -57,26 +57,26 @@ class Wav2VecModelLoader:
         }
         wav2vec_feature_extractor = Wav2Vec2FeatureExtractor(**feature_extractor_config)
 
-        model_path = folder_paths.get_full_path_or_raise("wav2vec", model)
+        model_path = folder_paths.get_full_path_or_raise("wav2vec2", model)
         sd = load_torch_file(model_path, device=transfomer_load_device, safe_load=True)
 
-        for name, param in wav2vec.named_parameters():
+        for name, param in wav2vec2.named_parameters():
             key = "wav2vec2." + name
             if "original0" in name:
                 key = "wav2vec2.encoder.pos_conv_embed.conv.weight_g"
             elif "original1" in name:
                 key = "wav2vec2.encoder.pos_conv_embed.conv.weight_v"
             value=sd[key]
-            set_module_tensor_to_device(wav2vec, name, device=offload_device, dtype=base_dtype, value=value)
+            set_module_tensor_to_device(wav2vec2, name, device=offload_device, dtype=base_dtype, value=value)
 
-        wav2vec_processor_model = {
+        wav2vec2_model = {
             "feature_extractor": wav2vec_feature_extractor,
-            "model": wav2vec,
+            "model": wav2vec2,
             "dtype": base_dtype,
             "model_type": "tencent",
         }
 
-        return (wav2vec_processor_model,)
+        return (wav2vec2_model,)
     
 class MultiTalkModelLoader:
     @classmethod
@@ -170,7 +170,7 @@ class MultiTalkWav2VecEmbeds:
     def process(self, wav2vec_model, normalize_loudness, fps, num_frames, audio_1, audio_scale, audio_cfg_scale, multi_audio_type, audio_2=None, audio_3=None, audio_4=None, ref_target_masks=None):
         model_type = wav2vec_model["model_type"]
         if not "tencent" in model_type.lower():
-            raise ValueError("Only tencent wav2vec models supported by MultiTalk")
+            raise ValueError("Only tencent wav2vec2 models supported by MultiTalk")
         import torchaudio
         import numpy as np
         from einops import rearrange
@@ -178,8 +178,8 @@ class MultiTalkWav2VecEmbeds:
         device = mm.get_torch_device()
         offload_device = mm.unet_offload_device()
         dtype = wav2vec_model["dtype"]
-        wav2vec = wav2vec_model["model"]
-        wav2vec_feature_extractor = wav2vec_model["feature_extractor"]
+        wav2vec2 = wav2vec_model["model"]
+        wav2vec2_feature_extractor = wav2vec_model["feature_extractor"]
 
         sr = 16000
 
@@ -215,7 +215,7 @@ class MultiTalkWav2VecEmbeds:
                 audio_segment = loudness_norm(audio_segment, sr=sr)
 
             audio_feature = np.squeeze(
-                wav2vec_feature_extractor(audio_segment, sampling_rate=sr).input_values
+                wav2vec2_feature_extractor(audio_segment, sampling_rate=sr).input_values
             )
 
             audio_feature = torch.from_numpy(audio_feature).float().to(device=device)
@@ -225,9 +225,9 @@ class MultiTalkWav2VecEmbeds:
             audio_duration = len(audio_segment) / sr
             video_length = audio_duration * fps
 
-            wav2vec.to(device)
-            embeddings = wav2vec(audio_feature.to(dtype), seq_len=int(video_length), output_hidden_states=True)
-            wav2vec.to(offload_device)
+            wav2vec2.to(device)
+            embeddings = wav2vec2(audio_feature.to(dtype), seq_len=int(video_length), output_hidden_states=True)
+            wav2vec2.to(offload_device)
 
             if len(embeddings) == 0:
                 print("Fail to extract audio embedding for one speaker")
@@ -414,7 +414,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MultiTalkModelLoader": "Multi/InfiniteTalk Model Loader",
-    "MultiTalkWav2VecEmbeds": "Multi/InfiniteTalk Wav2Vec Embeds",
+    "MultiTalkWav2VecEmbeds": "Multi/InfiniteTalk Wav2vec2 Embeds",
     "WanVideoImageToVideoMultiTalk": "WanVideo Long I2V Multi/InfiniteTalk",
-    "Wav2VecModelLoader": "Wav2Vec Model Loader"
+    "Wav2VecModelLoader": "Wav2vec2 Model Loader"
 }
