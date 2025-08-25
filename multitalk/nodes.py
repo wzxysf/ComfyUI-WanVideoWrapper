@@ -3,9 +3,81 @@ from comfy import model_management as mm
 from comfy.utils import load_torch_file, common_upscale
 from accelerate import init_empty_weights
 import torch
-from ..utils import log
+from ..utils import log, set_module_tensor_to_device
+import os
+import json
 
+script_directory = os.path.dirname(os.path.abspath(__file__))
+folder_paths.add_model_folder_path("wav2vec", os.path.join(folder_paths.models_dir, "wav2vec"))
 
+class Wav2VecModelLoader:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": (folder_paths.get_filename_list("wav2vec"), {"tooltip": "These models are loaded from the 'ComfyUI/models/wav2vec' -folder",}),
+                "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+                "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
+            },
+           
+        }
+    
+
+    RETURN_TYPES = ("WAV2VECMODEL",)
+    RETURN_NAMES = ("wav2vec_model", )
+    FUNCTION = "loadmodel"
+    CATEGORY = "WanVideoWrapper"
+
+    def loadmodel(self, model, base_precision, load_device):
+        from transformers import Wav2Vec2Config, Wav2Vec2FeatureExtractor
+        from ..multitalk.wav2vec2 import Wav2Vec2Model as MultiTalkWav2Vec2Model
+        
+        base_dtype = {"fp8_e4m3fn": torch.float8_e4m3fn, "fp8_e4m3fn_fast": torch.float8_e4m3fn, "bf16": torch.bfloat16, "fp16": torch.float16, "fp16_fast": torch.float16, "fp32": torch.float32}[base_precision]
+        device = mm.get_torch_device()
+        offload_device = mm.unet_offload_device()
+
+        if load_device == "offload_device":
+            transfomer_load_device = offload_device
+        else:
+            transfomer_load_device = device
+
+        config_path = os.path.join(script_directory, "wav2vec_config.json")
+        wav2vec_config = Wav2Vec2Config(**json.load(open(config_path)))
+
+        with init_empty_weights():
+            wav2vec = MultiTalkWav2Vec2Model(wav2vec_config).eval()
+
+        feature_extractor_config = {
+            "do_normalize": False,
+            "feature_size": 1,
+            "padding_side": "right",
+            "padding_value": 0.0,
+            "return_attention_mask": False,
+            "sampling_rate": 16000
+        }
+        wav2vec_feature_extractor = Wav2Vec2FeatureExtractor(**feature_extractor_config)
+
+        model_path = folder_paths.get_full_path_or_raise("wav2vec", model)
+        sd = load_torch_file(model_path, device=transfomer_load_device, safe_load=True)
+
+        for name, param in wav2vec.named_parameters():
+            key = "wav2vec2." + name
+            if "original0" in name:
+                key = "wav2vec2.encoder.pos_conv_embed.conv.weight_g"
+            elif "original1" in name:
+                key = "wav2vec2.encoder.pos_conv_embed.conv.weight_v"
+            value=sd[key]
+            set_module_tensor_to_device(wav2vec, name, device=offload_device, dtype=base_dtype, value=value)
+
+        wav2vec_processor_model = {
+            "feature_extractor": wav2vec_feature_extractor,
+            "model": wav2vec,
+            "dtype": base_dtype,
+            "model_type": "tencent",
+        }
+
+        return (wav2vec_processor_model,)
+    
 class MultiTalkModelLoader:
     @classmethod
     def INPUT_TYPES(s):
@@ -336,11 +408,13 @@ class WanVideoImageToVideoMultiTalk:
 NODE_CLASS_MAPPINGS = {
     "MultiTalkModelLoader": MultiTalkModelLoader,
     "MultiTalkWav2VecEmbeds": MultiTalkWav2VecEmbeds,
-    "WanVideoImageToVideoMultiTalk": WanVideoImageToVideoMultiTalk    
+    "WanVideoImageToVideoMultiTalk": WanVideoImageToVideoMultiTalk,
+    "Wav2VecModelLoader": Wav2VecModelLoader
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MultiTalkModelLoader": "Multi/InfiniteTalk Model Loader",
     "MultiTalkWav2VecEmbeds": "Multi/InfiniteTalk Wav2Vec Embeds",
-    "WanVideoImageToVideoMultiTalk": "WanVideo Long I2V Multi/InfiniteTalk"
+    "WanVideoImageToVideoMultiTalk": "WanVideo Long I2V Multi/InfiniteTalk",
+    "Wav2VecModelLoader": "Wav2Vec Model Loader"
 }

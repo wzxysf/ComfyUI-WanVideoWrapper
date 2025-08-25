@@ -2013,9 +2013,6 @@ class WanVideoSampler:
             minimax_latents = minimax_latents.to(device, dtype)
             minimax_mask_latents = minimax_mask_latents.to(device, dtype)
 
-        # Stand-In
-        standin_input = image_embeds.get("standin_input", None)
-
         # Context windows
         is_looped = False
         context_reference_latent = None
@@ -2310,7 +2307,12 @@ class WanVideoSampler:
         if isinstance(rope_function, dict):
             ntk_alphas = rope_function["ntk_scale_f"], rope_function["ntk_scale_h"], rope_function["ntk_scale_w"]
             rope_function = rope_function["rope_function"]
-            
+
+        # Stand-In
+        standin_input = image_embeds.get("standin_input", None)
+        if standin_input is not None:
+            rope_function = "comfy" # only works with this currently
+
         freqs = None
         transformer.rope_embedder.k = None
         transformer.rope_embedder.num_frames = None
