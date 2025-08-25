@@ -2070,19 +2070,19 @@ class WanVideoSampler:
                     pad_len = latent_video_length - dwpose_data.shape[2]
                     pad = dwpose_data[:,:,:1].repeat(1,1,pad_len,1,1)
                     dwpose_data = torch.cat([dwpose_data, pad], dim=2)
-            dwpose_data_flat = rearrange(dwpose_data, 'b c f h w -> b (f h w) c').contiguous()
             
             random_ref_dwpose_data = None
             if image_cond is not None:
-                transformer.randomref_embedding_pose.to(device)
+                transformer.randomref_embedding_pose.to(device, dtype)
                 random_ref_dwpose = unianimate_poses.get("ref", None)
                 if random_ref_dwpose is not None:
                     random_ref_dwpose_data = transformer.randomref_embedding_pose(
-                        random_ref_dwpose.to(device)
+                        random_ref_dwpose.to(device, dtype)
                         ).unsqueeze(2).to(model["dtype"]) # [1, 20, 104, 60]
+                del random_ref_dwpose
                 
             unianim_data = {
-                "dwpose": dwpose_data_flat,
+                "dwpose": dwpose_data,
                 "random_ref": random_ref_dwpose_data.squeeze(0) if random_ref_dwpose_data is not None else None,
                 "strength": unianimate_poses["strength"],
                 "start_percent": unianimate_poses["start_percent"],
@@ -3162,9 +3162,8 @@ class WanVideoSampler:
                             partial_unianim_data = None
                             if unianim_data is not None:
                                 partial_dwpose = dwpose_data[:, :, c]
-                                partial_dwpose_flat=rearrange(partial_dwpose, 'b c f h w -> b (f h w) c')
                                 partial_unianim_data = {
-                                    "dwpose": partial_dwpose_flat,
+                                    "dwpose": partial_dwpose,
                                     "random_ref": unianim_data["random_ref"],
                                     "strength": unianimate_poses["strength"],
                                     "start_percent": unianimate_poses["start_percent"],
@@ -3472,9 +3471,8 @@ class WanVideoSampler:
                             partial_unianim_data = None
                             if unianim_data is not None:
                                 partial_dwpose = dwpose_data[:, :, latent_start_idx:latent_end_idx]
-                                partial_dwpose_flat=rearrange(partial_dwpose, 'b c f h w -> b (f h w) c')
                                 partial_unianim_data = {
-                                    "dwpose": partial_dwpose_flat,
+                                    "dwpose": partial_dwpose,
                                     "random_ref": unianim_data["random_ref"],
                                     "strength": unianimate_poses["strength"],
                                     "start_percent": unianimate_poses["start_percent"],
