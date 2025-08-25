@@ -1701,20 +1701,21 @@ class WanVideoSampler:
         is_5b = transformer.out_dim == 48
         vae_upscale_factor = 16 if is_5b else 8
 
+        # Load weights
         if transformer.patched_linear and gguf_reader is None:
             load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
 
-        if gguf_reader is not None:
+        if gguf_reader is not None: #handle GGUF
             load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
             set_lora_params_gguf(transformer, patcher.patches)
             transformer.patched_linear = True
-        elif len(patcher.patches) != 0 and transformer.patched_linear:
+        elif len(patcher.patches) != 0 and transformer.patched_linear: #handle patched linear layers (unmerged loras, fp8 scaled)
             log.info(f"Using {len(patcher.patches)} LoRA weight patches for WanVideo model")
             if not merge_loras and fp8_matmul:
                 raise NotImplementedError("FP8 matmul with unmerged LoRAs is not supported")
             set_lora_params(transformer, patcher.patches)
         else:
-            remove_lora_from_module(transformer)
+            remove_lora_from_module(transformer) #clear possible unmerged lora weights
 
         transformer.lora_scheduling_enabled = transformer_options.get("lora_scheduling_enabled", False)
 
@@ -2386,16 +2387,18 @@ class WanVideoSampler:
                 import copy
                 sample_scheduler_flipped = copy.deepcopy(sample_scheduler)
 
-        #rope
+        # Rotary positional embeddings (RoPE)
+
+        # RoPE base freq scaling as used with CineScale
         ntk_alphas = [1.0, 1.0, 1.0]
         if isinstance(rope_function, dict):
             ntk_alphas = rope_function["ntk_scale_f"], rope_function["ntk_scale_h"], rope_function["ntk_scale_w"]
             rope_function = rope_function["rope_function"]
-            
+        
         freqs = None
         transformer.rope_embedder.k = None
         transformer.rope_embedder.num_frames = None
-        if "default" in rope_function or bidirectional_sampling:
+        if "default" in rope_function or bidirectional_sampling: # original RoPE
             d = transformer.dim // transformer.num_heads
             freqs = torch.cat([
                 rope_params(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index),
@@ -2403,7 +2406,7 @@ class WanVideoSampler:
                 rope_params(1024, 2 * (d // 6))
             ],
             dim=1)
-        elif "comfy" in rope_function:
+        elif "comfy" in rope_function: # comfy's rope
             transformer.rope_embedder.k = riflex_freq_index
             transformer.rope_embedder.num_frames = latent_video_length
            
@@ -2565,37 +2568,37 @@ class WanVideoSampler:
 
                  
                 base_params = {
-                    'seq_len': seq_len,
-                    'device': device,
-                    'freqs': freqs,
-                    't': timestep,
-                    'current_step': idx,
-                    'last_step': len(timesteps) - 1 == idx,
-                    'control_lora_enabled': control_lora_enabled,
-                    'enhance_enabled': enhance_enabled,
-                    'camera_embed': camera_embed,
-                    'unianim_data': unianim_data,
-                    'fun_ref': fun_ref_input if fun_ref_image is not None else None,
-                    'fun_camera': control_camera_input if control_camera_latents is not None else None,
-                    'audio_proj': audio_proj if fantasytalking_embeds is not None else None,
-                    'audio_scale': audio_scale,
-                    "pcd_data": pcd_data_input,
-                    "controlnet": controlnet,
-                    "add_cond": add_cond_input,
-                    "nag_params": text_embeds.get("nag_params", {}),
-                    "nag_context": text_embeds.get("nag_prompt_embeds", None),
-                    "multitalk_audio": multitalk_audio_input if multitalk_audio_embedding is not None else None,
-                    "ref_target_masks": ref_target_masks if multitalk_audio_embedding is not None else None,
-                    "inner_t": [shot_len] if shot_len else None,
-                    "standin_input": standin_input,
-                    "fantasy_portrait_input": fantasy_portrait_input,
-                    "phantom_ref": phantom_ref,
-                    "reverse_time": reverse_time,
-                    "ntk_alphas": ntk_alphas,
-                    "mtv_motion_tokens": mtv_motion_tokens if mtv_input is not None else None,
-                    "mtv_motion_rotary_emb": mtv_motion_rotary_emb if mtv_input is not None else None,
-                    "mtv_strength": mtv_strength[idx] if mtv_input is not None else 1.0,
-                    "mtv_freqs": mtv_freqs if mtv_input is not None else None,
+                    'seq_len': seq_len, # sequence length
+                    'device': device, # main device
+                    'freqs': freqs, # rope freqs
+                    't': timestep, # current timestep
+                    'current_step': idx, # current step
+                    'last_step': len(timesteps) - 1 == idx, # is last step
+                    'control_lora_enabled': control_lora_enabled, # control lora toggle for patch embed selection
+                    'enhance_enabled': enhance_enabled, # enhance-a-video toggle
+                    'camera_embed': camera_embed, # recammaster embedding
+                    'unianim_data': unianim_data, # unianimate input
+                    'fun_ref': fun_ref_input if fun_ref_image is not None else None, # Fun model reference latent
+                    'fun_camera': control_camera_input if control_camera_latents is not None else None, # Fun model camera embed
+                    'audio_proj': audio_proj if fantasytalking_embeds is not None else None, # FantasyTalking audio projection
+                    'audio_scale': audio_scale, # FantasyTalking audio scale
+                    "pcd_data": pcd_data_input, # Uni3C input
+                    "controlnet": controlnet, # TheDenk's controlnet input
+                    "add_cond": add_cond_input, # additional conditioning input
+                    "nag_params": text_embeds.get("nag_params", {}), # normalized attention guidance
+                    "nag_context": text_embeds.get("nag_prompt_embeds", None), # normalized attention guidance context
+                    "multitalk_audio": multitalk_audio_input if multitalk_audio_embedding is not None else None, # Multi/InfiniteTalk audio input
+                    "ref_target_masks": ref_target_masks if multitalk_audio_embedding is not None else None, # Multi/InfiniteTalk reference target masks
+                    "inner_t": [shot_len] if shot_len else None, # inner timestep for EchoShot
+                    "standin_input": standin_input, # Stand-in reference input
+                    "fantasy_portrait_input": fantasy_portrait_input, # Fantasy portrait input
+                    "phantom_ref": phantom_ref, # Phantom reference input
+                    "reverse_time": reverse_time, # Reverse RoPE toggle
+                    "ntk_alphas": ntk_alphas, # RoPE freq scaling values
+                    "mtv_motion_tokens": mtv_motion_tokens if mtv_input is not None else None, # MTV-Crafter motion tokens
+                    "mtv_motion_rotary_emb": mtv_motion_rotary_emb if mtv_input is not None else None, # MTV-Crafter RoPE
+                    "mtv_strength": mtv_strength[idx] if mtv_input is not None else 1.0, # MTV-Crafter scaling
+                    "mtv_freqs": mtv_freqs if mtv_input is not None else None, # MTV-Crafter extra RoPE freqs
                 }
 
                 batch_size = 1
