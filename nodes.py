@@ -2226,6 +2226,7 @@ class WanVideoSampler:
             s2v_ref_latent = s2v_audio_embeds["ref_latent"]
             if s2v_ref_latent is not None:
                 s2v_ref_latent = s2v_ref_latent.to(device, dtype)
+            s2v_audio_input = s2v_audio_input[..., 0:image_embeds["num_frames"]]
             #s2v_audio_input_all_layers = s2v_audio_embeds["audio_encoder_output"]["encoded_audio_all_layers"]
             print(s2v_audio_input.shape)
             ##print(s2v_audio_input_all_layers[0].shape)
@@ -2509,7 +2510,7 @@ class WanVideoSampler:
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None, 
                              control_latents=None, vace_data=None, unianim_data=None, audio_proj=None, control_camera_latents=None, 
                              add_cond=None, cache_state=None, context_window=None, multitalk_audio_embeds=None, fantasy_portrait_input=None, reverse_time=False,
-                             mtv_motion_tokens=None):
+                             mtv_motion_tokens=None, s2v_audio_input=None):
             nonlocal transformer
             z = z.to(dtype)
             autocast_enabled = ("fp8" in model["quantization"] and not transformer.patched_linear)
@@ -3202,6 +3203,10 @@ class WanVideoSampler:
                                     log.info(f"context window: {c}")
                                     log.info(f"motion_token_indices: {start_token_index}-{end_token_index}")
 
+                            partial_s2v_audio_input = None
+                            if s2v_audio_input is not None:
+                                partial_s2v_audio_input = s2v_audio_input[..., c]
+
                             partial_add_cond = None
                             if add_cond is not None:
                                 partial_add_cond = add_cond[:, :, c].to(device, dtype)
@@ -3219,7 +3224,7 @@ class WanVideoSampler:
                                 text_embeds["negative_prompt_embeds"], 
                                 partial_timestep, idx, partial_img_emb, clip_fea, partial_control_latents, partial_vace_context, partial_unianim_data,partial_audio_proj,
                                 partial_control_camera_latents, partial_add_cond, current_teacache, context_window=c, fantasy_portrait_input=partial_fantasy_portrait_input,
-                                mtv_motion_tokens=partial_mtv_motion_tokens)
+                                mtv_motion_tokens=partial_mtv_motion_tokens, s2v_audio_input=partial_s2v_audio_input)
 
                             if cache_args is not None:
                                 self.window_tracker.cache_states[window_id] = new_teacache
@@ -3653,7 +3658,7 @@ class WanVideoSampler:
                             text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
-                            cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens)
+                            cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens, s2v_audio_input=s2v_audio_input)
                         if bidirectional_sampling:
                             noise_pred_flipped, self.cache_state = predict_with_cfg(
                             latent_model_input_flipped, 

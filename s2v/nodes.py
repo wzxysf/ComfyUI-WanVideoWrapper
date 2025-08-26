@@ -92,8 +92,6 @@ class WanVideoAddAudioEmbeds:
         elif len(audio_embed_bucket.shape) == 4:
             audio_embed_bucket = audio_embed_bucket.permute(0, 2, 3, 1)
 
-        audio_embed_bucket = audio_embed_bucket[..., 0:frames]
-
         print("audio_embed_bucket", audio_embed_bucket.shape)
 
         new_entry = {

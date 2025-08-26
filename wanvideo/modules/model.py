@@ -30,6 +30,8 @@ from ...echoshot.echoshot import rope_apply_z, rope_apply_c, rope_apply_echoshot
 
 from ...MTV.mtv import apply_rotary_emb
 
+from .s2v.motioner import MotionerTransformers, FramePackMotioner, rope_precompute
+
 from diffusers.models.attention import AdaLayerNorm
 
 __all__ = ['WanModel']
@@ -190,7 +192,6 @@ def sinusoidal_embedding_1d(dim, position):
         position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
     x = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
     return x
-
 
 def rope_params(max_seq_len, dim, theta=10000, L_test=25, k=0):
     assert dim % 2 == 0
@@ -1302,7 +1303,6 @@ class AudioInjector_WAN(nn.Module):
                  adain_dim=2048,
                  need_adain_ont=False):
         super().__init__()
-        num_injector_layers = len(inject_layer)
         self.injected_block_id = {}
         audio_injector_id = 0
         for mod_name, mod in zip(all_modules_names, all_modules):
@@ -1623,6 +1623,48 @@ class WanModel(torch.nn.Module):
         self.adain_mode = adain_mode
         self.zero_timestep = zero_timestep
 
+        # init motioner
+        enable_framepack = False
+        enable_motioner = False
+        add_last_motion = False
+        if enable_motioner and enable_framepack:
+            raise ValueError(
+                "enable_motioner and enable_framepack are mutually exclusive, please set one of them to False"
+            )
+        self.enable_motioner = enable_motioner
+        self.add_last_motion = add_last_motion
+        if enable_motioner:
+            motioner_dim = 2048
+            self.motioner = MotionerTransformers(
+                patch_size=(2, 4, 4),
+                dim=motioner_dim,
+                ffn_dim=motioner_dim,
+                freq_dim=256,
+                out_dim=16,
+                num_heads=16,
+                num_layers=13,
+                window_size=(-1, -1),
+                qk_norm=True,
+                cross_attn_norm=False,
+                eps=1e-6,
+                motion_token_num=4,
+                enable_tsm=False,
+                motion_stride=4,
+                expand_ratio=2,
+                trainable_token_pos_emb=False,
+            )
+            self.zip_motion_out = torch.nn.Sequential(
+                WanLayerNorm(motioner_dim),
+                zero_module(nn.Linear(motioner_dim, self.dim)))
+
+        self.enable_framepack = enable_framepack
+        if enable_framepack:
+            self.frame_packer = FramePackMotioner(
+                inner_dim=self.dim,
+                num_heads=self.num_heads,
+                zip_frame_buckets=[1, 2, 16],
+                drop_mode='padd')
+
     @staticmethod
     def _prepare_blockwise_causal_attn_mask(
         device: torch.device | str, num_frames: int = 21,
@@ -1773,6 +1815,151 @@ class WanModel(torch.nn.Module):
                 block.to(self.offload_device, non_blocking=self.use_non_blocking)
 
         return hints
+
+    def process_motion(self, motion_latents, drop_motion_frames=False):
+        if drop_motion_frames or motion_latents[0].shape[1] == 0:
+            return [], []
+        self.lat_motion_frames = motion_latents[0].shape[1]
+        mot = [self.patch_embedding(m.unsqueeze(0)) for m in motion_latents]
+        batch_size = len(mot)
+
+        mot_remb = []
+        flattern_mot = []
+        for bs in range(batch_size):
+            height, width = mot[bs].shape[3], mot[bs].shape[4]
+            flat_mot = mot[bs].flatten(2).transpose(1, 2).contiguous()
+            motion_grid_sizes = [[
+                torch.tensor([-self.lat_motion_frames, 0,
+                              0]).unsqueeze(0).repeat(1, 1),
+                torch.tensor([0, height, width]).unsqueeze(0).repeat(1, 1),
+                torch.tensor([self.lat_motion_frames, height,
+                              width]).unsqueeze(0).repeat(1, 1)
+            ]]
+            motion_rope_emb = rope_precompute(
+                flat_mot.detach().view(1, flat_mot.shape[1], self.num_heads,
+                                       self.dim // self.num_heads),
+                motion_grid_sizes,
+                self.freqs,
+                start=None)
+            mot_remb.append(motion_rope_emb)
+            flattern_mot.append(flat_mot)
+        return flattern_mot, mot_remb
+
+    def process_motion_frame_pack(self,
+                                  motion_latents,
+                                  drop_motion_frames=False,
+                                  add_last_motion=2):
+        flattern_mot, mot_remb = self.frame_packer(motion_latents,
+                                                   add_last_motion)
+        if drop_motion_frames:
+            return [m[:, :0] for m in flattern_mot
+                   ], [m[:, :0] for m in mot_remb]
+        else:
+            return flattern_mot, mot_remb
+
+    def process_motion_transformer_motioner(self,
+                                            motion_latents,
+                                            drop_motion_frames=False,
+                                            add_last_motion=True):
+        batch_size, height, width = len(
+            motion_latents), motion_latents[0].shape[2] // self.patch_size[
+                1], motion_latents[0].shape[3] // self.patch_size[2]
+
+        freqs = self.freqs
+        device = self.patch_embedding.weight.device
+        if freqs.device != device:
+            freqs = freqs.to(device)
+        if self.trainable_token_pos_emb:
+            token_freqs = self.token_freqs.to(torch.float64)
+            token_freqs = token_freqs / token_freqs.norm(
+                dim=-1, keepdim=True)
+            freqs = [freqs, torch.view_as_complex(token_freqs)]
+
+        if not drop_motion_frames and add_last_motion:
+            last_motion_latent = [u[:, -1:] for u in motion_latents]
+            last_mot = [
+                self.patch_embedding(m.unsqueeze(0)) for m in last_motion_latent
+            ]
+            last_mot = [m.flatten(2).transpose(1, 2) for m in last_mot]
+            last_mot = torch.cat(last_mot)
+            gride_sizes = [[
+                torch.tensor([-1, 0, 0]).unsqueeze(0).repeat(batch_size, 1),
+                torch.tensor([0, height,
+                              width]).unsqueeze(0).repeat(batch_size, 1),
+                torch.tensor([1, height,
+                              width]).unsqueeze(0).repeat(batch_size, 1)
+            ]]
+        else:
+            last_mot = torch.zeros([batch_size, 0, self.dim],
+                                   device=motion_latents[0].device,
+                                   dtype=motion_latents[0].dtype)
+            gride_sizes = []
+
+        zip_motion = self.motioner(motion_latents)
+        zip_motion = self.zip_motion_out(zip_motion)
+        if drop_motion_frames:
+            zip_motion = zip_motion * 0.0
+        zip_motion_grid_sizes = [[
+            torch.tensor([-1, 0, 0]).unsqueeze(0).repeat(batch_size, 1),
+            torch.tensor([
+                0, self.motioner.motion_side_len, self.motioner.motion_side_len
+            ]).unsqueeze(0).repeat(batch_size, 1),
+            torch.tensor(
+                [1 if not self.trainable_token_pos_emb else -1, height,
+                 width]).unsqueeze(0).repeat(batch_size, 1),
+        ]]
+
+        mot = torch.cat([last_mot, zip_motion], dim=1)
+        gride_sizes = gride_sizes + zip_motion_grid_sizes
+
+        motion_rope_emb = rope_precompute(
+            mot.detach().view(batch_size, mot.shape[1], self.num_heads,
+                              self.dim // self.num_heads),
+            gride_sizes,
+            freqs,
+            start=None)
+        return [m.unsqueeze(0) for m in mot
+               ], [r.unsqueeze(0) for r in motion_rope_emb]
+
+    def inject_motion(self,
+                      x,
+                      seq_lens,
+                      rope_embs,
+                      mask_input,
+                      motion_latents,
+                      drop_motion_frames=False,
+                      add_last_motion=True):
+        # inject the motion frames token to the hidden states
+        if self.enable_motioner:
+            mot, mot_remb = self.process_motion_transformer_motioner(
+                motion_latents,
+                drop_motion_frames=drop_motion_frames,
+                add_last_motion=add_last_motion)
+        elif self.enable_framepack:
+            mot, mot_remb = self.process_motion_frame_pack(
+                motion_latents,
+                drop_motion_frames=drop_motion_frames,
+                add_last_motion=add_last_motion)
+        else:
+            mot, mot_remb = self.process_motion(
+                motion_latents, drop_motion_frames=drop_motion_frames)
+
+        if len(mot) > 0:
+            x = [torch.cat([u, m], dim=1) for u, m in zip(x, mot)]
+            seq_lens = seq_lens + torch.tensor([r.size(1) for r in mot],
+                                               dtype=torch.long)
+            rope_embs = [
+                torch.cat([u, m], dim=1) for u, m in zip(rope_embs, mot_remb)
+            ]
+            mask_input = [
+                torch.cat([
+                    m, 2 * torch.ones([1, u.shape[1] - m.shape[1]],
+                                      device=m.device,
+                                      dtype=m.dtype)
+                ],
+                          dim=1) for m, u in zip(mask_input, x)
+            ]
+        return x, seq_lens, rope_embs, mask_input
     
     def audio_injector_forward(self, block_idx, x, audio_emb, scale=1.0):
         if block_idx in self.audio_injector.injected_block_id.keys():
@@ -1845,7 +2032,8 @@ class WanModel(torch.nn.Module):
         mtv_strength=1.0,
         s2v_audio_input=None,
         s2v_ref_latent=None,
-        s2v_audio_scale=1.0
+        s2v_audio_scale=1.0,
+        motion_latents=None
 
     ):
         r"""
@@ -1893,8 +2081,8 @@ class WanModel(torch.nn.Module):
 
         #s2v
         if self.model_type == 's2v' and s2v_audio_input is not None:
-            motion_frames=[17, 5]
-
+            #motion_frames=[17, 5]
+            motion_frames=[1, 0]
             s2v_audio_input = torch.cat([s2v_audio_input[..., 0:1].repeat(1, 1, 1, motion_frames[0]), s2v_audio_input], dim=-1)
             
             audio_emb_res = self.casual_audio_encoder(s2v_audio_input)
@@ -2108,9 +2296,39 @@ class WanModel(torch.nn.Module):
             e0 = torch.cat([
                 e0.unsqueeze(2),
                 zero_e0.unsqueeze(2).repeat(e0.size(0), 1, 1, 1)
-            ],
-                           dim=2)
+            ], dim=2)
             e0 = [e0, self.original_seq_len]
+
+            mask_input = torch.zeros([1, x.shape[1]], dtype=torch.int32, device=x.device)
+            mask_input[:, self.original_seq_len:] = 1
+
+
+            if motion_latents is not None:
+                # compute the rope embeddings for the input
+                #x = torch.cat(x)
+                b, s, n, d = x.size(0), x.size(
+                    1), self.num_heads, self.dim // self.num_heads
+                self.pre_compute_freqs = rope_precompute(
+                    x.detach().view(b, s, n, d), grid_sizes, freqs, start=None)
+
+                x = [u.unsqueeze(0) for u in x]
+                self.pre_compute_freqs = [
+                    u.unsqueeze(0) for u in self.pre_compute_freqs
+                ]
+                x, seq_lens, self.pre_compute_freqs, mask_input = self.inject_motion(
+                    x,
+                    seq_lens,
+                    self.pre_compute_freqs,
+                    mask_input,
+                    motion_latents,
+                    drop_motion_frames=self.drop_motion_frames,
+                    add_last_motion=True)
+
+                x = torch.cat(x, dim=0)
+                self.pre_compute_freqs = torch.cat(self.pre_compute_freqs, dim=0)
+                mask_input = torch.cat(mask_input, dim=0)
+            
+            x = x + self.trainable_cond_mask(mask_input).to(x.dtype)
 
         if x_ip is not None:
             timestep_ip = torch.zeros_like(t)  # [B] with 0s
@@ -2503,7 +2721,7 @@ class WanModel(torch.nn.Module):
             x = x[:, :x_len]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
-        x = x[:, :self.original_seq_len]
+        #x = x[:, :self.original_seq_len]
         x = self.head(x, e.to(x.device))
         x = self.unpatchify(x, grid_sizes) # type: ignore[arg-type]
         x = [u.float() for u in x]

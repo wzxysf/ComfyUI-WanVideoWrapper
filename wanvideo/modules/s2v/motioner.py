@@ -1,16 +1,16 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict
 
 import numpy as np
 import torch
 import torch.cuda.amp as amp
 import torch.nn as nn
-from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
-from diffusers.utils import BaseOutput, is_torch_version
+from diffusers.loaders import PeftAdapterMixin
+from diffusers.utils import BaseOutput
 from einops import rearrange, repeat
 
-from ..model import flash_attention
+from ..attention import attention
 from .s2v_utils import rope_precompute
 
 
@@ -172,12 +172,11 @@ class SelfAttention(nn.Module):
 
         q, k, v = qkv_fn(x)
 
-        x = flash_attention(
+        x = attention(
             q=rope_apply(q, grid_sizes, freqs),
             k=rope_apply(k, grid_sizes, freqs),
             v=v,
-            k_lens=seq_lens,
-            window_size=self.window_size)
+            k_lens=seq_lens)
 
         # output
         x = x.flatten(2)
@@ -224,12 +223,7 @@ class SwinSelfAttention(SelfAttention):
 
         # q: b (t h w) n d
         # k: b (t h w) n d
-        out = flash_attention(
-            q=q,
-            k=k,
-            v=v,
-            # k_lens=torch.tensor([k.shape[1]] * k.shape[0], device=x.device, dtype=torch.long),
-            window_size=self.window_size)
+        out = attention(q, k, v)
         out = torch.cat([out, ref_v[:1]], axis=0)
         out = rearrange(out, '(b t) (h w) n d -> b (t h w) n d', t=T, h=H, w=W)
         x = out
@@ -308,7 +302,7 @@ class CasualSelfAttention(SelfAttention):
         # k: b (t h w) n d
         outs = []
         for i in range(q.shape[0]):
-            out = flash_attention(
+            out = attention(
                 q=q[i:i + 1],
                 k=k[i:i + 1],
                 v=v[i:i + 1],
@@ -479,10 +473,8 @@ class MotionerTransformers(nn.Module, PeftAdapterMixin):
 
             gride_sizes = [[
                 torch.tensor([0, 0, 0]).unsqueeze(0).repeat(1, 1),
-                torch.tensor([1, self.motion_side_len,
-                              self.motion_side_len]).unsqueeze(0).repeat(1, 1),
-                torch.tensor([1, self.motion_side_len,
-                              self.motion_side_len]).unsqueeze(0).repeat(1, 1),
+                torch.tensor([1, self.motion_side_len, self.motion_side_len]).unsqueeze(0).repeat(1, 1),
+                torch.tensor([1, self.motion_side_len, self.motion_side_len]).unsqueeze(0).repeat(1, 1),
             ]]
             token_freqs = rope_apply(x, gride_sizes, self.freqs)
             token_freqs = token_freqs[0, :, 0].reshape(motion_token_num, -1, 2)
@@ -502,7 +494,6 @@ class MotionerTransformers(nn.Module, PeftAdapterMixin):
         context:        A list of text embeddings each with shape [L, C].
         """
         # params
-        motion_frames = x[0].shape[1]
         device = self.patch_embedding.weight.device
         freqs = self.freqs
         if freqs.device != device:
@@ -535,22 +526,16 @@ class MotionerTransformers(nn.Module, PeftAdapterMixin):
         seq_f, seq_h, seq_w = x[0].shape[-3:]
         batch_size = len(x)
         if not self.enable_tsm:
-            grid_sizes = torch.stack(
-                [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
-            grid_sizes = [[
-                torch.zeros_like(grid_sizes), grid_sizes, grid_sizes
-            ]]
+            grid_sizes = torch.stack([torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
+            grid_sizes = [[torch.zeros_like(grid_sizes), grid_sizes, grid_sizes]]
             seq_f = 0
         else:
             grid_sizes = []
             for idx in sample_idx[0][::-1][::self.sample_c]:
                 tsm_frame_grid_sizes = [[
-                    torch.tensor([idx, 0,
-                                  0]).unsqueeze(0).repeat(batch_size, 1),
-                    torch.tensor([idx + 1, seq_h,
-                                  seq_w]).unsqueeze(0).repeat(batch_size, 1),
-                    torch.tensor([1, seq_h,
-                                  seq_w]).unsqueeze(0).repeat(batch_size, 1),
+                    torch.tensor([idx, 0, 0]).unsqueeze(0).repeat(batch_size, 1),
+                    torch.tensor([idx + 1, seq_h, seq_w]).unsqueeze(0).repeat(batch_size, 1),
+                    torch.tensor([1, seq_h, seq_w]).unsqueeze(0).repeat(batch_size, 1),
                 ]]
                 grid_sizes += tsm_frame_grid_sizes
             seq_f = sample_idx[0][-1] + 1
@@ -563,14 +548,10 @@ class MotionerTransformers(nn.Module, PeftAdapterMixin):
 
         token_grid_sizes = [[
             torch.tensor([seq_f, 0, 0]).unsqueeze(0).repeat(batch_size, 1),
-            torch.tensor(
-                [seq_f + 1, self.motion_side_len,
-                 self.motion_side_len]).unsqueeze(0).repeat(batch_size, 1),
-            torch.tensor(
-                [1 if not self.trainable_token_pos_emb else -1, seq_h,
-                 seq_w]).unsqueeze(0).repeat(batch_size, 1),
+            torch.tensor([seq_f + 1, self.motion_side_len,self.motion_side_len]).unsqueeze(0).repeat(batch_size, 1),
+            torch.tensor([1 if not self.trainable_token_pos_emb else -1, seq_h, seq_w]).unsqueeze(0).repeat(batch_size, 1),
         ]  # 第三行代表rope emb的想要覆盖到的范围
-                           ]
+        ]
 
         grid_sizes = grid_sizes + token_grid_sizes
         token_unpatch_grid_sizes = torch.stack([
@@ -589,31 +570,8 @@ class MotionerTransformers(nn.Module, PeftAdapterMixin):
             freqs=freqs,
         )
 
-        # grad ckpt args
-        def create_custom_forward(module, return_dict=None):
-
-            def custom_forward(*inputs, **kwargs):
-                if return_dict is not None:
-                    return module(*inputs, **kwargs, return_dict=return_dict)
-                else:
-                    return module(*inputs, **kwargs)
-
-            return custom_forward
-
-        ckpt_kwargs: Dict[str, Any] = ({
-            "use_reentrant": False
-        } if is_torch_version(">=", "1.11.0") else {})
-
         for idx, block in enumerate(self.blocks):
-            if self.training and self.gradient_checkpointing:
-                x = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    x,
-                    **kwargs,
-                    **ckpt_kwargs,
-                )
-            else:
-                x = block(x, **kwargs)
+            x = block(x, **kwargs)
         # head
         out = x[:, -token_len:]
         return out
@@ -627,18 +585,6 @@ class MotionerTransformers(nn.Module, PeftAdapterMixin):
             u = u.reshape(c, *[i * j for i, j in zip(v, self.patch_size)])
             out.append(u)
         return out
-
-    def init_weights(self):
-        # basic init
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
-        # init embeddings
-        nn.init.xavier_uniform_(self.patch_embedding.weight.flatten(1))
-
 
 class FramePackMotioner(nn.Module):
 
@@ -677,7 +623,6 @@ class FramePackMotioner(nn.Module):
         self.drop_mode = drop_mode
 
     def forward(self, motion_latents, add_last_motion=2):
-        motion_frames = motion_latents[0].shape[1]
         mot = []
         mot_remb = []
         for m in motion_latents:
@@ -702,21 +647,15 @@ class FramePackMotioner(nn.Module):
                 list(self.zip_frame_buckets)[::-1], dim=2)  # 16, 2 ,1
 
             # patchfy
-            clean_latents_post = self.proj(clean_latents_post).flatten(
-                2).transpose(1, 2)
-            clean_latents_2x = self.proj_2x(clean_latents_2x).flatten(
-                2).transpose(1, 2)
-            clean_latents_4x = self.proj_4x(clean_latents_4x).flatten(
-                2).transpose(1, 2)
+            clean_latents_post = self.proj(clean_latents_post).flatten(2).transpose(1, 2)
+            clean_latents_2x = self.proj_2x(clean_latents_2x).flatten(2).transpose(1, 2)
+            clean_latents_4x = self.proj_4x(clean_latents_4x).flatten(2).transpose(1, 2)
 
             if add_last_motion < 2 and self.drop_mode == "drop":
-                clean_latents_post = clean_latents_post[:, :
-                                                        0] if add_last_motion < 2 else clean_latents_post
-                clean_latents_2x = clean_latents_2x[:, :
-                                                    0] if add_last_motion < 1 else clean_latents_2x
+                clean_latents_post = clean_latents_post[:, :0] if add_last_motion < 2 else clean_latents_post
+                clean_latents_2x = clean_latents_2x[:, :0] if add_last_motion < 1 else clean_latents_2x
 
-            motion_lat = torch.cat(
-                [clean_latents_post, clean_latents_2x, clean_latents_4x], dim=1)
+            motion_lat = torch.cat([clean_latents_post, clean_latents_2x, clean_latents_4x], dim=1)
 
             # rope
             start_time_id = -(self.zip_frame_buckets[:1].sum())
@@ -731,20 +670,18 @@ class FramePackMotioner(nn.Module):
             start_time_id = -(self.zip_frame_buckets[:2].sum())
             end_time_id = start_time_id + self.zip_frame_buckets[1] // 2
             grid_sizes_2x = [] if add_last_motion < 1 and self.drop_mode == "drop" else \
-            [
-                [torch.tensor([start_time_id, 0, 0]).unsqueeze(0).repeat(1, 1),
+            [[
+                torch.tensor([start_time_id, 0, 0]).unsqueeze(0).repeat(1, 1),
                 torch.tensor([end_time_id, lat_height // 4, lat_width // 4]).unsqueeze(0).repeat(1, 1),
-                torch.tensor([self.zip_frame_buckets[1], lat_height // 2, lat_width // 2]).unsqueeze(0).repeat(1, 1), ]
-            ]
+                torch.tensor([self.zip_frame_buckets[1], lat_height // 2, lat_width // 2]).unsqueeze(0).repeat(1, 1),
+            ]]
 
             start_time_id = -(self.zip_frame_buckets[:3].sum())
             end_time_id = start_time_id + self.zip_frame_buckets[2] // 4
             grid_sizes_4x = [[
                 torch.tensor([start_time_id, 0, 0]).unsqueeze(0).repeat(1, 1),
-                torch.tensor([end_time_id, lat_height // 8,
-                              lat_width // 8]).unsqueeze(0).repeat(1, 1),
-                torch.tensor([
-                    self.zip_frame_buckets[2], lat_height // 2, lat_width // 2
+                torch.tensor([end_time_id, lat_height // 8, lat_width // 8]).unsqueeze(0).repeat(1, 1),
+                torch.tensor([self.zip_frame_buckets[2], lat_height // 2, lat_width // 2
                 ]).unsqueeze(0).repeat(1, 1),
             ]]
 
@@ -781,14 +718,3 @@ def sample_indices(N, stride, expand_ratio, c):
 
     return indices
 
-
-if __name__ == '__main__':
-    device = "cuda"
-    model = FramePackMotioner(inner_dim=1024)
-    batch_size = 2
-    num_frame, height, width = (28, 32, 32)
-    single_input = torch.ones([16, num_frame, height, width], device=device)
-    for i in range(num_frame):
-        single_input[:, num_frame - 1 - i] *= i
-    x = [single_input] * batch_size
-    model.forward(x)
