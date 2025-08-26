@@ -2212,6 +2212,16 @@ class WanVideoSampler:
             log.info(f"mtv_motion_rotary_emb: {motion_rotary_emb[0].shape}")
             mtv_freqs = mtv_freqs.to(device, dtype)
 
+        #region S2V
+        s2v_audio_input = None
+        s2v_audio_embeds = image_embeds.get("audio_embeds", None)
+        if s2v_audio_embeds is not None:
+            log.info(f"Using S2V audio embeddings")
+            s2v_audio_input = s2v_audio_embeds["audio_embed_bucket"].to(device, dtype)
+            #s2v_audio_input_all_layers = s2v_audio_embeds["audio_encoder_output"]["encoded_audio_all_layers"]
+            print(s2v_audio_input.shape)
+            ##print(s2v_audio_input_all_layers[0].shape)
+
         # vid2vid
         noise_mask=original_image=None
         if samples is not None and not multitalk_sampling:
@@ -2669,6 +2679,7 @@ class WanVideoSampler:
                     "mtv_motion_rotary_emb": mtv_motion_rotary_emb if mtv_input is not None else None, # MTV-Crafter RoPE
                     "mtv_strength": mtv_strength[idx] if mtv_input is not None else 1.0, # MTV-Crafter scaling
                     "mtv_freqs": mtv_freqs if mtv_input is not None else None, # MTV-Crafter extra RoPE freqs
+                    "s2v_audio_input": s2v_audio_input #official speech-to-video
                 }
 
                 batch_size = 1

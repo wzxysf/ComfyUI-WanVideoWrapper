@@ -30,10 +30,37 @@ from ...echoshot.echoshot import rope_apply_z, rope_apply_c, rope_apply_echoshot
 
 from ...MTV.mtv import apply_rotary_emb
 
+from diffusers.models.attention import AdaLayerNorm
 
 __all__ = ['WanModel']
 
 from comfy import model_management as mm
+
+
+def zero_module(module):
+    """
+    Zero out the parameters of a module and return it.
+    """
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
+
+
+def torch_dfs(model: nn.Module, parent_name='root'):
+    module_names, modules = [], []
+    current_name = parent_name if parent_name else 'root'
+    module_names.append(current_name)
+    modules.append(model)
+
+    for name, child in model.named_children():
+        if parent_name:
+            child_name = f'{parent_name}.{name}'
+        else:
+            child_name = name
+        child_modules, child_names = torch_dfs(child, child_name)
+        module_names += child_names
+        modules += child_modules
+    return modules, module_names
 
 #from comfy.ldm.flux.math import apply_rope as apply_rope_comfy
 def apply_rope_comfy(xq, xk, freqs_cis):    
@@ -1175,41 +1202,143 @@ class MLPProj(torch.nn.Module):
         clip_extra_context_tokens = self.proj(image_embeds)
         return clip_extra_context_tokens
 
+from .s2v.auxi_blocks import MotionEncoder_tc
+
+
+class CausalAudioEncoder(nn.Module):
+
+    def __init__(self,
+                 dim=5120,
+                 num_layers=25,
+                 out_dim=2048,
+                 video_rate=8,
+                 num_token=4,
+                 need_global=False):
+        super().__init__()
+        self.encoder = MotionEncoder_tc(
+            in_dim=dim,
+            hidden_dim=out_dim,
+            num_heads=num_token,
+            need_global=need_global)
+        weight = torch.ones((1, num_layers, 1, 1)) * 0.01
+
+        self.weights = torch.nn.Parameter(weight)
+        self.act = torch.nn.SiLU()
+
+    def forward(self, features):
+        # features B * num_layers * dim * video_length
+        weights = self.act(self.weights)
+        weights_sum = weights.sum(dim=1, keepdims=True)
+        weighted_feat = ((features * weights) / weights_sum).sum(
+            dim=1)  # b dim f
+        weighted_feat = weighted_feat.permute(0, 2, 1)  # b f dim
+        res = self.encoder(weighted_feat)  # b f n dim
+
+        return res  # b f n dim
+
+
+class AudioCrossAttention(WanT2VCrossAttention):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+class AudioInjector_WAN(nn.Module):
+
+    def __init__(self,
+                 all_modules,
+                 all_modules_names,
+                 dim=2048,
+                 num_heads=32,
+                 inject_layer=[0, 27],
+                 root_net=None,
+                 enable_adain=False,
+                 adain_dim=2048,
+                 need_adain_ont=False):
+        super().__init__()
+        num_injector_layers = len(inject_layer)
+        self.injected_block_id = {}
+        audio_injector_id = 0
+        for mod_name, mod in zip(all_modules_names, all_modules):
+            if isinstance(mod, WanAttentionBlock):
+                for inject_id in inject_layer:
+                    if f'transformer_blocks.{inject_id}' in mod_name:
+                        self.injected_block_id[inject_id] = audio_injector_id
+                        audio_injector_id += 1
+
+        self.injector = nn.ModuleList([
+            AudioCrossAttention(
+                in_features=dim,
+                out_features=dim,
+                num_heads=num_heads,
+                qk_norm=True,
+            ) for _ in range(audio_injector_id)
+        ])
+        self.injector_pre_norm_feat = nn.ModuleList([
+            nn.LayerNorm(
+                dim,
+                elementwise_affine=False,
+                eps=1e-6,
+            ) for _ in range(audio_injector_id)
+        ])
+        self.injector_pre_norm_vec = nn.ModuleList([
+            nn.LayerNorm(
+                dim,
+                elementwise_affine=False,
+                eps=1e-6,
+            ) for _ in range(audio_injector_id)
+        ])
+        if enable_adain:
+            self.injector_adain_layers = nn.ModuleList([
+                AdaLayerNorm(
+                    output_dim=dim * 2, embedding_dim=adain_dim, chunk_dim=1)
+                for _ in range(audio_injector_id)
+            ])
+            if need_adain_ont:
+                self.injector_adain_output_layers = nn.ModuleList(
+                    [nn.Linear(dim, dim) for _ in range(audio_injector_id)])
 
 class WanModel(torch.nn.Module):
     def __init__(self,
-                 model_type='t2v',
-                 patch_size=(1, 2, 2),
-                 text_len=512,
-                 in_dim=16,
-                 dim=2048,
-                 in_features=5120,
-                 out_features=5120,
-                 ffn_dim=8192,
-                 ffn2_dim=8192,
-                 freq_dim=256,
-                 text_dim=4096,
-                 out_dim=16,
-                 num_heads=16,
-                 num_layers=32,
-                 qk_norm=True,
-                 cross_attn_norm=True,
-                 eps=1e-6,
-                 attention_mode='sdpa',
-                 rope_func='comfy',
-                 main_device=torch.device('cuda'),
-                 offload_device=torch.device('cpu'),
-                 teacache_coefficients=[],
-                 magcache_ratios=[],
-                 vace_layers=None,
-                 vace_in_dim=None,
-                 inject_sample_info=False,
-                 add_ref_conv=False,
-                 in_dim_ref_conv=16,
-                 add_control_adapter=False,
-                 in_dim_control_adapter=24,
-                 use_motion_attn=False
-                 ):
+                model_type='t2v',
+                patch_size=(1, 2, 2),
+                text_len=512,
+                in_dim=16,
+                dim=2048,
+                in_features=5120,
+                out_features=5120,
+                ffn_dim=8192,
+                ffn2_dim=8192,
+                freq_dim=256,
+                text_dim=4096,
+                out_dim=16,
+                num_heads=16,
+                num_layers=32,
+                qk_norm=True,
+                cross_attn_norm=True,
+                eps=1e-6,
+                attention_mode='sdpa',
+                rope_func='comfy',
+                main_device=torch.device('cuda'),
+                offload_device=torch.device('cpu'),
+                teacache_coefficients=[],
+                magcache_ratios=[],
+                vace_layers=None,
+                vace_in_dim=None,
+                inject_sample_info=False,
+                add_ref_conv=False,
+                in_dim_ref_conv=16,
+                add_control_adapter=False,
+                in_dim_control_adapter=24,
+                use_motion_attn=False,
+                #s2v
+                cond_dim=0,
+                audio_dim=1024,
+                num_audio_token=4,
+                enable_adain=False,
+                adain_mode="attn_norm",
+                audio_inject_layers=[0, 4, 8, 12, 16, 20, 24, 27, 30, 33, 36, 39],
+                ):
         r"""
         Initialize the diffusion model backbone.
 
@@ -1360,7 +1489,7 @@ class WanModel(torch.nn.Module):
             ])
         else:
             # blocks
-            if model_type == 't2v':
+            if model_type == 't2v' or model_type == 's2v':
                 cross_attn_type = 't2v_cross_attn'
             elif model_type == 'i2v' or model_type == 'fl2v':
                 cross_attn_type = 'i2v_cross_attn'
@@ -1414,6 +1543,36 @@ class WanModel(torch.nn.Module):
             self.control_adapter = None
 
         self.block_mask=None
+
+        #S2V
+        if cond_dim > 0:
+            self.cond_encoder = nn.Conv3d(
+                cond_dim,
+                self.dim,
+                kernel_size=self.patch_size,
+                stride=self.patch_size)
+        self.enable_adain = enable_adain
+        self.casual_audio_encoder = CausalAudioEncoder(
+            dim=audio_dim,
+            out_dim=self.dim,
+            num_token=num_audio_token,
+            need_global=enable_adain)
+        all_modules, all_modules_names = torch_dfs(
+            self.blocks, parent_name="root.transformer_blocks")
+        self.audio_injector = AudioInjector_WAN(
+            all_modules,
+            all_modules_names,
+            dim=self.dim,
+            num_heads=self.num_heads,
+            inject_layer=audio_inject_layers,
+            root_net=self,
+            enable_adain=enable_adain,
+            adain_dim=self.dim,
+            need_adain_ont=adain_mode != "attn_norm",
+        )
+        self.adain_mode = adain_mode
+
+        self.trainable_cond_mask = nn.Embedding(3, self.dim)
 
     @staticmethod
     def _prepare_blockwise_causal_attn_mask(
@@ -1565,6 +1724,46 @@ class WanModel(torch.nn.Module):
                 block.to(self.offload_device, non_blocking=self.use_non_blocking)
 
         return hints
+    
+    def audio_injector_forward(self, block_idx, hidden_states, merged_audio_emb):
+        if block_idx in self.audio_injector.injected_block_id.keys():
+            audio_attn_id = self.audio_injector.injected_block_id[block_idx]
+            audio_emb = merged_audio_emb  # b f n c
+            num_frames = audio_emb.shape[1]
+
+            input_hidden_states = hidden_states[:, :self.original_seq_len].clone()  # b (f h w) c
+            input_hidden_states = rearrange(
+                input_hidden_states, "b (t n) c -> (b t) n c", t=num_frames)
+
+            if self.enable_adain and self.adain_mode == "attn_norm":
+                audio_emb_global = self.audio_emb_global
+                audio_emb_global = rearrange(audio_emb_global,
+                                             "b t n c -> (b t) n c")
+                adain_hidden_states = self.audio_injector.injector_adain_layers[
+                    audio_attn_id](
+                        input_hidden_states, temb=audio_emb_global[:, 0])
+                attn_hidden_states = adain_hidden_states
+            else:
+                attn_hidden_states = self.audio_injector.injector_pre_norm_feat[
+                    audio_attn_id](
+                        input_hidden_states)
+            audio_emb = rearrange(
+                audio_emb, "b t n c -> (b t) n c", t=num_frames)
+            attn_audio_emb = audio_emb
+            residual_out = self.audio_injector.injector[audio_attn_id](
+                x=attn_hidden_states,
+                context=attn_audio_emb,
+                context_lens=torch.ones(
+                    attn_hidden_states.shape[0],
+                    dtype=torch.long,
+                    device=attn_hidden_states.device) * attn_audio_emb.shape[1])
+            residual_out = rearrange(
+                residual_out, "(b t) n c -> b (t n) c", t=num_frames)
+            hidden_states[:, :self.
+                          original_seq_len] = hidden_states[:, :self.
+                                                            original_seq_len] + residual_out
+
+        return hidden_states
 
     def forward(
         self,
@@ -1610,6 +1809,7 @@ class WanModel(torch.nn.Module):
         mtv_motion_rotary_emb=None,
         mtv_freqs=None,
         mtv_strength=1.0,
+        s2v_audio_input=None
         
     ):
         r"""
@@ -1654,8 +1854,25 @@ class WanModel(torch.nn.Module):
                 if isinstance(submodule, nn.Linear):
                     if hasattr(submodule, 'step'):
                         submodule.step = current_step
+
+        #s2v
+        if self.model_type == 's2v' and s2v_audio_input is not None:
+            motion_frames=[17, 5]
+
+            s2v_audio_input = torch.cat([s2v_audio_input[..., 0:1].repeat(1, 1, 1, motion_frames[0]), s2v_audio_input], dim=-1)
+            
+            audio_emb_res = self.casual_audio_encoder(s2v_audio_input)
+            if self.enable_adain:
+                audio_emb_global, audio_emb = audio_emb_res
+                self.audio_emb_global = audio_emb_global[:, motion_frames[1]:].clone()
+            else:
+                audio_emb = audio_emb_res
+            merged_audio_emb = audio_emb[:, motion_frames[1]:, :]
+
+
         # params
         device = self.patch_embedding.weight.device
+
         if freqs is not None and freqs.device != device:
            freqs = freqs.to(device)
 
@@ -1737,7 +1954,9 @@ class WanModel(torch.nn.Module):
             F += phantom_ref_frames
             x = [torch.concat([u, phantom_ref.unsqueeze(0)], dim=1) for phantom_ref, u in zip(phantom_ref, x)]
 
-        seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
+        seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
+        self.original_seq_len = x[0].size(1)
+
         assert seq_lens.max() <= seq_len
         x = torch.cat([
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
@@ -2163,6 +2382,8 @@ class WanModel(torch.nn.Module):
                         if self.slg_start_percent <= current_step_percentage <= self.slg_end_percent:
                             continue
                 x, x_ip = block(x, x_ip=x_ip, **kwargs) #run block
+                if self.audio_injector is not None and s2v_audio_input is not None:
+                    x = self.audio_injector_forward(b, x, merged_audio_emb) #s2v
                 if self.block_swap_debug:
                     compute_end = time.perf_counter()
                     compute_time = compute_end - compute_start
