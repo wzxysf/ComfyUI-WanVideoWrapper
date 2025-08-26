@@ -787,6 +787,7 @@ class WanAttentionBlock(nn.Module):
 
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 6, out_features) / in_features**0.5)
+        self.seg_idx = None
 
     @torch.compiler.disable()
     def get_mod(self, e):
