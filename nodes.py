@@ -3205,7 +3205,15 @@ class WanVideoSampler:
 
                             partial_s2v_audio_input = None
                             if s2v_audio_input is not None:
-                                partial_s2v_audio_input = s2v_audio_input[..., c]
+                                audio_indices = []
+                                max_audio_index = s2v_audio_input.shape[-1]
+                                for i in c:
+                                    for j in range(4):
+                                        i_ = i * 4 + j
+                                        if i_ < max_audio_index:
+                                            audio_indices.append(i_)
+                                print("audio_indices:", audio_indices)
+                                partial_s2v_audio_input = s2v_audio_input[..., audio_indices]
 
                             partial_add_cond = None
                             if add_cond is not None:
