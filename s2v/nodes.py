@@ -53,6 +53,7 @@ class WanVideoAddAudioEmbeds:
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
                     "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT",),
                     "frames": ("INT", {"default": 81, "min": 1, "max": 100000, "step": 1, "tooltip": "Number of frames to process"}),
+                    "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Scale factor for audio embeddings"})
                 },
                 "optional": {
                     "ref_latent": ("LATENT",)
@@ -65,7 +66,7 @@ class WanVideoAddAudioEmbeds:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, frames, audio_encoder_output, ref_latent=None):
+    def add(self, embeds, frames, audio_encoder_output, audio_scale, ref_latent=None):
         all_layers = audio_encoder_output["encoded_audio_all_layers"]
         audio_feat = torch.stack(all_layers, dim=0).squeeze(1)  # shape: [num_layers, T, 512]
 
@@ -98,7 +99,8 @@ class WanVideoAddAudioEmbeds:
         new_entry = {
             "audio_embed_bucket": audio_embed_bucket,
             "num_repeat": num_repeat,
-            "ref_latent": ref_latent["samples"] if ref_latent is not None else None
+            "ref_latent": ref_latent["samples"] if ref_latent is not None else None,
+            "audio_scale": audio_scale
         }
         updated = dict(embeds)
         updated["audio_embeds"] = new_entry
