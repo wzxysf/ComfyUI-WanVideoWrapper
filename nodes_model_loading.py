@@ -1190,7 +1190,8 @@ class WanVideoModelLoader:
             "add_control_adapter": True if "control_adapter.conv.weight" in sd else False,
             "use_motion_attn": True if "blocks.0.motion_attn.k.weight" in sd else False,
             "enable_adain": True if "audio_injector.injector_adain_layers.0.linear.weight" in sd else False,
-            "cond_dim": sd["cond_encoder.weight"].shape[1] if "cond_encoder.weight" in sd else 0
+            "cond_dim": sd["cond_encoder.weight"].shape[1] if "cond_encoder.weight" in sd else 0,
+            "zero_timestep": model_type == "s2v",
 
         }
 

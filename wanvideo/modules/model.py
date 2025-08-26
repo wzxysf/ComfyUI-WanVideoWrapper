@@ -19,7 +19,7 @@ except:
 
 from .attention import attention
 import numpy as np
-
+from copy import deepcopy
 from tqdm import tqdm
 import gc
 
@@ -796,8 +796,24 @@ class WanAttentionBlock(nn.Module):
             e = (self.modulation.unsqueeze(2) + e).chunk(6, dim=1) # 1, 6, 1, dim
             return [ei.squeeze(1) for ei in e]
     
-    def modulate(self, x, shift_msa, scale_msa):
-        return torch.addcmul(shift_msa, x, 1 + scale_msa)
+    def modulate(self, x, shift_msa, scale_msa, seg_idx=None):
+        """
+        Modulate x with shift and scale. If seg_idx is provided, apply segmented modulation.
+        """
+        norm_x = self.norm1(x)
+        if seg_idx is not None:
+            parts = []
+            for i in range(2):
+                part = torch.addcmul(
+                    shift_msa[:, i:i + 1],
+                    norm_x[:, seg_idx[i]:seg_idx[i + 1]],
+                    1 + scale_msa[:, i:i + 1]
+                )
+                parts.append(part)
+            norm_x = torch.cat(parts, dim=1)
+            return norm_x
+        else:
+            return torch.addcmul(shift_msa, norm_x, 1 + scale_msa)
     
     def ffn_chunked(self, x, shift_mlp, scale_mlp, num_chunks=4):
         modulated_input = torch.addcmul(shift_mlp, self.norm2(x), 1 + scale_mlp)
@@ -864,9 +880,15 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        #e = (self.modulation.to(e.device) + e).chunk(6, dim=1)
+        self.zero_timestep = len(e) == 2
+        if self.zero_timestep: #s2v zero timestep
+            self.seg_idx = e[1]
+            self.seg_idx = min(max(0, self.seg_idx), x.size(1))
+            self.seg_idx = [0, self.seg_idx, x.size(1)]
+            e = e[0]
+
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.get_mod(e.to(x.device))
-        input_x = self.modulate(self.norm1(x), shift_msa, scale_msa)
+        input_x = self.modulate(x, shift_msa, scale_msa, seg_idx=self.seg_idx)
 
         if x_ip is not None:
             shift_msa_ip, scale_msa_ip, gate_msa_ip, shift_mlp_ip, scale_mlp_ip, gate_mlp_ip = self.get_mod(e_ip.to(x.device))
@@ -984,7 +1006,14 @@ class WanAttentionBlock(nn.Module):
                 y[:, -self.cond_size :],
             )
 
-        x = x.addcmul(y, gate_msa)
+        if self.zero_timestep:
+            z = []
+            for i in range(2):
+                z.append(y[:, self.seg_idx[i]:self.seg_idx[i + 1]] * gate_msa[:, i:i + 1])
+            y = torch.cat(z, dim=1)
+            x = x.add(y)
+        else:
+            x = x.addcmul(y, gate_msa)
 
         # cross-attention & ffn function
         if context is not None:
@@ -1037,8 +1066,24 @@ class WanAttentionBlock(nn.Module):
             if self.rope_func == "comfy_chunked":
                 y = self.ffn_chunked(x, shift_mlp, scale_mlp)
             else:
-                y = self.ffn(torch.addcmul(shift_mlp, self.norm2(x), 1 + scale_mlp))
-            x = x.addcmul(y, gate_mlp)
+                norm2_x = self.norm2(x)
+                if self.zero_timestep:
+                    parts = []
+                    for i in range(2):
+                        parts.append(norm2_x[:, self.seg_idx[i]:self.seg_idx[i + 1]] *
+                                    (1 + scale_mlp[:, i:i + 1]) + shift_mlp[:, i:i + 1])
+                    norm2_x = torch.cat(parts, dim=1)
+                    y = self.ffn(norm2_x)
+                else:
+                    y = self.ffn(torch.addcmul(shift_mlp, norm2_x, 1 + scale_mlp))
+            if self.zero_timestep:
+                z = []
+                for i in range(2):
+                    z.append(y[:, self.seg_idx[i]:self.seg_idx[i + 1]] * gate_mlp[:, i:i + 1])
+                y = torch.cat(z, dim=1)
+                x = x.add(y)
+            else:
+                x = x.addcmul(y, gate_mlp)
             return x
     
     @torch.compiler.disable()
@@ -1338,6 +1383,7 @@ class WanModel(torch.nn.Module):
                 enable_adain=False,
                 adain_mode="attn_norm",
                 audio_inject_layers=[0, 4, 8, 12, 16, 20, 24, 27, 30, 33, 36, 39],
+                zero_timestep=False
                 ):
         r"""
         Initialize the diffusion model backbone.
@@ -1571,6 +1617,7 @@ class WanModel(torch.nn.Module):
             need_adain_ont=adain_mode != "attn_norm",
         )
         self.adain_mode = adain_mode
+        self.zero_timestep = zero_timestep
 
         self.trainable_cond_mask = nn.Embedding(3, self.dim)
 
@@ -1809,8 +1856,9 @@ class WanModel(torch.nn.Module):
         mtv_motion_rotary_emb=None,
         mtv_freqs=None,
         mtv_strength=1.0,
-        s2v_audio_input=None
-        
+        s2v_audio_input=None,
+        s2v_ref_latent=None
+
     ):
         r"""
         Forward pass through the diffusion model
@@ -1917,12 +1965,15 @@ class WanModel(torch.nn.Module):
             fun_camera = self.control_adapter(fun_camera)
             x = [u + v for u, v in zip(x, fun_camera)]
 
-        grid_sizes = torch.stack(
-            [torch.tensor(u.shape[2:], device=device, dtype=torch.long) for u in x])
-
+        grid_sizes = torch.stack([torch.tensor(u.shape[2:], device=device, dtype=torch.long) for u in x])
         x = [u.flatten(2).transpose(1, 2) for u in x]
 
+        seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
+        assert seq_lens.max() <= seq_len
+
         x_len = x[0].shape[1]
+
+        self.original_seq_len = x[0].size(1)
 
         if add_cond is not None:
             add_cond = self.add_conv_in(add_cond.to(self.add_conv_in.weight.dtype)).to(x[0].dtype)
@@ -1943,24 +1994,26 @@ class WanModel(torch.nn.Module):
             grid_sizes = torch.stack([torch.tensor([u[0] + 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
             seq_len += fun_ref.size(1)
             F += 1
-            x = [torch.concat([_fun_ref.unsqueeze(0), u], dim=1) for _fun_ref, u in zip(fun_ref, x)]
+            x = [torch.cat([_fun_ref.unsqueeze(0), u], dim=1) for _fun_ref, u in zip(fun_ref, x)]
 
-        if phantom_ref is not None:
-            phantom_ref_frames = phantom_ref.size(1)
-            phantom_ref = self.original_patch_embedding(phantom_ref.unsqueeze(0).to(torch.float32)).flatten(2).transpose(1, 2).to(x[0].dtype)
-            grid_sizes = torch.stack([torch.tensor([u[0] + phantom_ref_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
-            phantom_ref_seq_len = phantom_ref.size(1)
-            seq_len += phantom_ref_seq_len
-            F += phantom_ref_frames
-            x = [torch.concat([u, phantom_ref.unsqueeze(0)], dim=1) for phantom_ref, u in zip(phantom_ref, x)]
+        end_ref_latent=None
+        if s2v_ref_latent is not None:
+            end_ref_latent = s2v_ref_latent.squeeze(0)
+        elif phantom_ref is not None:
+            end_ref_latent = phantom_ref
+        if end_ref_latent is not None:
+            end_ref_latent_frames = end_ref_latent.size(1)
+            end_ref_latent = self.original_patch_embedding(end_ref_latent.unsqueeze(0).to(torch.float32)).flatten(2).transpose(1, 2).to(x[0].dtype)
+            grid_sizes = torch.stack([torch.tensor([u[0] + end_ref_latent_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
+            end_ref_latent_seq_len = end_ref_latent.size(1)
+            seq_len += end_ref_latent_seq_len
+            F += end_ref_latent_frames
+            x = [torch.cat([u, end_ref_latent.unsqueeze(0)], dim=1) for end_ref_latent, u in zip(end_ref_latent, x)]
 
-        seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
-        self.original_seq_len = x[0].size(1)
-
-        assert seq_lens.max() <= seq_len
+        grid_sizes = grid_sizes
         x = torch.cat([
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
-                      dim=1) for u in x
+                    dim=1) for u in x
         ])
 
         # StandIn LoRA input
@@ -2053,8 +2106,23 @@ class WanModel(torch.nn.Module):
         else:
             expanded_timesteps = False
 
+        if self.zero_timestep:
+            t = torch.cat([t, torch.zeros([1], dtype=t.dtype, device=t.device)])
+
         e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(x.dtype))  # b, dim
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))  # b, 6, dim
+
+        #S2V zero timestep
+        if self.zero_timestep:
+            e = e[:-1]
+            zero_e0 = e0[-1:]
+            e0 = e0[:-1]
+            e0 = torch.cat([
+                e0.unsqueeze(2),
+                zero_e0.unsqueeze(2).repeat(e0.size(0), 1, 1, 1)
+            ],
+                           dim=2)
+            e0 = [e0, self.original_seq_len]
 
         if x_ip is not None:
             timestep_ip = torch.zeros_like(t)  # [B] with 0s
@@ -2438,15 +2506,16 @@ class WanModel(torch.nn.Module):
             x = x[:, fun_ref_length:]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
         
-        if phantom_ref is not None:
-            phantom_ref_length = phantom_ref.size(1)
-            x = x[:, :-phantom_ref_length]
-            grid_sizes = torch.stack([torch.tensor([u[0] - phantom_ref_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
+        if end_ref_latent is not None:
+            end_ref_latent_length = end_ref_latent.size(1)
+            x = x[:, :-end_ref_latent_length]
+            grid_sizes = torch.stack([torch.tensor([u[0] - end_ref_latent_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
         if attn_cond is not None:
             x = x[:, :x_len]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
+        x = x[:, :self.original_seq_len]
         x = self.head(x, e.to(x.device))
         x = self.unpatchify(x, grid_sizes) # type: ignore[arg-type]
         x = [u.float() for u in x]
