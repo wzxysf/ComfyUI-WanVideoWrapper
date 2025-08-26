@@ -3212,7 +3212,6 @@ class WanVideoSampler:
                                         i_ = i * 4 + j
                                         if i_ < max_audio_index:
                                             audio_indices.append(i_)
-                                print("audio_indices:", audio_indices)
                                 partial_s2v_audio_input = s2v_audio_input[..., audio_indices]
 
                             partial_add_cond = None
