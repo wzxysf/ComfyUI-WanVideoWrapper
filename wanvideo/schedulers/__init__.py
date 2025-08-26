@@ -23,7 +23,7 @@ scheduler_list = [
     "multitalk"
 ]
 
-def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer_dim, flowedit_args, denoise_strength, sigmas=None, seed_g=None):
+def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer_dim=5120, flowedit_args=None, denoise_strength=1.0, sigmas=None):
     timesteps = None
     if 'unipc' in scheduler:
         sample_scheduler = FlowUniPCMultistepScheduler(shift=shift)
@@ -130,6 +130,7 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
 
     # Slice timesteps and sigmas once, based on indices
     timesteps = timesteps[start_idx:end_idx+1]
+    sample_scheduler.full_sigmas = sample_scheduler.sigmas.clone()
     sample_scheduler.sigmas = sample_scheduler.sigmas[start_idx:start_idx+len(timesteps)+1]  # always one longer
     
 
@@ -138,11 +139,4 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
     if hasattr(sample_scheduler, 'timesteps'):
         sample_scheduler.timesteps = timesteps
 
-    if seed_g is not None:
-        scheduler_step_args = {"generator": seed_g}
-        step_sig = inspect.signature(sample_scheduler.step)
-        for arg in list(scheduler_step_args.keys()):
-            if arg not in step_sig.parameters:
-                scheduler_step_args.pop(arg)
-
-    return sample_scheduler, timesteps, scheduler_step_args
+    return sample_scheduler, timesteps
