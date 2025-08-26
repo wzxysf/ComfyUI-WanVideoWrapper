@@ -1592,7 +1592,7 @@ class WanModel(torch.nn.Module):
         self.block_mask=None
 
         #S2V
-        self.zero_timestep = None
+        self.zero_timestep = self.audio_injector = None
         if cond_dim > 0:
             self.cond_encoder = nn.Conv3d(
                 cond_dim,
@@ -1619,10 +1619,9 @@ class WanModel(torch.nn.Module):
                 adain_dim=self.dim,
                 need_adain_ont=adain_mode != "attn_norm",
             )
-            self.adain_mode = adain_mode
-            self.zero_timestep = zero_timestep
-
             self.trainable_cond_mask = nn.Embedding(3, self.dim)
+        self.adain_mode = adain_mode
+        self.zero_timestep = zero_timestep
 
     @staticmethod
     def _prepare_blockwise_causal_attn_mask(
