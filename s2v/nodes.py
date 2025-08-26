@@ -52,9 +52,10 @@ class WanVideoAddAudioEmbeds:
         return {"required": {
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
                     "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT",),
-                    "input_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 120.0, "step": 1.0, "tooltip": "Frames per second for the audio"}),
+                    "input_fps": ("FLOAT", {"default": 50.0, "min": 1.0, "max": 120.0, "step": 1.0, "tooltip": "Frames per second for the audio"}),
                     "output_fps": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 120.0, "step": 1.0, "tooltip": "Frames per second for the video"}),
-                    "frames": ("INT", {"default": 81, "min": 1, "max": 120, "step": 1, "tooltip": "Number of frames to process"})
+                    "bucket_fps": ("FLOAT", {"default": 16.0, "min": 1.0, "max": 120.0, "step": 1.0, "tooltip": "Frames per second for the generated video"}),
+                    "frames": ("INT", {"default": 80, "min": 1, "max": 120, "step": 1, "tooltip": "Number of frames to process"})
                 }
         }
 
@@ -63,7 +64,7 @@ class WanVideoAddAudioEmbeds:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, input_fps, output_fps, frames, audio_encoder_output):
+    def add(self, embeds, input_fps, output_fps, bucket_fps, frames, audio_encoder_output):
         # Prepare the new audio entry
 
         #audio_feat = audio_encoder_output["encoded_audio"]
@@ -80,7 +81,7 @@ class WanVideoAddAudioEmbeds:
 
         audio_embed_bucket, num_repeat = self.get_audio_embed_bucket_fps(
             audio_feat,
-            fps=output_fps,
+            fps=bucket_fps,
             batch_frames=frames
         )
 
