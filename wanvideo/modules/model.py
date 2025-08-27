@@ -2138,7 +2138,8 @@ class WanModel(torch.nn.Module):
         s2v_audio_input=None,
         s2v_ref_latent=None,
         s2v_audio_scale=1.0,
-        s2v_ref_motion=None
+        s2v_ref_motion=None,
+        s2v_pose=None
 
     ):
         r"""
@@ -2242,6 +2243,12 @@ class WanModel(torch.nn.Module):
             self.original_patch_embedding(u.unsqueeze(0).to(torch.float32)).to(x[0].dtype)
             for u in x
             ]
+        
+        if s2v_pose is not None:
+            print("s2v_pose.shape:", s2v_pose.shape)
+            print("x[0].shape:", x[0].shape)
+            x[0] = x[0] + self.cond_encoder(s2v_pose.to(self.cond_encoder.weight.dtype)).to(x[0].dtype)
+
         
         if self.control_adapter is not None and fun_camera is not None:
             fun_camera = self.control_adapter(fun_camera)
@@ -2371,8 +2378,8 @@ class WanModel(torch.nn.Module):
             x = torch.cat([x, motion_encoded], dim=1)
             freqs = torch.cat([freqs, freqs_motion], dim=1)
 
-            t = torch.repeat_interleave(t, 2, dim=1)
-            t = torch.cat([t, torch.zeros((t.shape[0], 3), device=t.device, dtype=t.dtype)], dim=1)
+            #t = torch.repeat_interleave(t, 2, dim=1)
+            #t = torch.cat([t, torch.zeros((t.shape[0], 3), device=t.device, dtype=t.dtype)], dim=1)
 
         # time embeddings
         if t.dim() == 2:

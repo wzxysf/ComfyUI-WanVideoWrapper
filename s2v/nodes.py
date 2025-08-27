@@ -51,12 +51,13 @@ class WanVideoAddAudioEmbeds:
     def INPUT_TYPES(s):
         return {"required": {
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT",),
                     "frames": ("INT", {"default": 81, "min": 1, "max": 100000, "step": 1, "tooltip": "Number of frames to process"}),
                     "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Scale factor for audio embeddings"})
                 },
                 "optional": {
-                    "ref_latent": ("LATENT",)
+                    "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT",),
+                    "ref_latent": ("LATENT",),
+                    "pose_latent": ("LATENT",)
                 }
 
         }
@@ -66,38 +67,40 @@ class WanVideoAddAudioEmbeds:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, frames, audio_encoder_output, audio_scale, ref_latent=None):
-        all_layers = audio_encoder_output["encoded_audio_all_layers"]
-        audio_feat = torch.stack(all_layers, dim=0).squeeze(1)  # shape: [num_layers, T, 512]
+    def add(self, embeds, frames, audio_encoder_output=None, audio_scale=1.0, ref_latent=None, pose_latent=None):
+        if audio_encoder_output is not None:
+            all_layers = audio_encoder_output["encoded_audio_all_layers"]
+            audio_feat = torch.stack(all_layers, dim=0).squeeze(1)  # shape: [num_layers, T, 512]
 
-        print("audio_feat", audio_feat.shape)
-        input_fps = 50
-        output_fps = 30
-        bucket_fps = 16
+            print("audio_feat", audio_feat.shape)
+            input_fps = 50
+            output_fps = 30
+            bucket_fps = 16
 
-        if input_fps != output_fps:
-            audio_feat = linear_interpolation(audio_feat, input_fps=input_fps, output_fps=output_fps)
+            if input_fps != output_fps:
+                audio_feat = linear_interpolation(audio_feat, input_fps=input_fps, output_fps=output_fps)
 
-        self.video_rate = output_fps
+            self.video_rate = output_fps
 
-        audio_embed_bucket, num_repeat = self.get_audio_embed_bucket_fps(
-            audio_feat,
-            fps=bucket_fps,
-            batch_frames=frames-1
-        )
+            audio_embed_bucket, num_repeat = self.get_audio_embed_bucket_fps(
+                audio_feat,
+                fps=bucket_fps,
+                batch_frames=frames-1
+            )
 
-        audio_embed_bucket = audio_embed_bucket.unsqueeze(0)
-        if len(audio_embed_bucket.shape) == 3:
-            audio_embed_bucket = audio_embed_bucket.permute(0, 2, 1)
-        elif len(audio_embed_bucket.shape) == 4:
-            audio_embed_bucket = audio_embed_bucket.permute(0, 2, 3, 1)
+            audio_embed_bucket = audio_embed_bucket.unsqueeze(0)
+            if len(audio_embed_bucket.shape) == 3:
+                audio_embed_bucket = audio_embed_bucket.permute(0, 2, 1)
+            elif len(audio_embed_bucket.shape) == 4:
+                audio_embed_bucket = audio_embed_bucket.permute(0, 2, 3, 1)
 
-        print("audio_embed_bucket", audio_embed_bucket.shape)
+            print("audio_embed_bucket", audio_embed_bucket.shape)
 
         new_entry = {
-            "audio_embed_bucket": audio_embed_bucket,
-            "num_repeat": num_repeat,
+            "audio_embed_bucket": audio_embed_bucket if audio_encoder_output is not None else None,
+            "num_repeat": num_repeat if audio_encoder_output is not None else None,
             "ref_latent": ref_latent["samples"] if ref_latent is not None else None,
+            "pose_latent": pose_latent["samples"] if pose_latent is not None else None,
             "audio_scale": audio_scale
         }
         updated = dict(embeds)

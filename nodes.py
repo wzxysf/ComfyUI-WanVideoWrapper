@@ -2228,17 +2228,23 @@ class WanVideoSampler:
         s2v_audio_embeds = image_embeds.get("audio_embeds", None)
         if s2v_audio_embeds is not None:
             log.info(f"Using S2V audio embeddings")
-            s2v_audio_input = s2v_audio_embeds["audio_embed_bucket"].to(device, dtype)
+            s2v_audio_input = s2v_audio_embeds.get("audio_embed_bucket", None)
+            if s2v_audio_input is not None:
+                s2v_audio_input = s2v_audio_input[..., 0:image_embeds["num_frames"]].to(device, dtype)
             s2v_audio_scale = s2v_audio_embeds["audio_scale"]
-            s2v_ref_latent = s2v_audio_embeds["ref_latent"].to(device, dtype) if "ref_latent" in s2v_audio_embeds else None
-            s2v_ref_motion = s2v_audio_embeds["ref_motion"].to(device, dtype) if "ref_motion" in s2v_audio_embeds else None
-            s2v_audio_input = s2v_audio_input[..., 0:image_embeds["num_frames"]]
+            s2v_ref_latent = s2v_audio_embeds.get("ref_latent", None)
+            if s2v_ref_latent is not None:
+                s2v_ref_latent = s2v_ref_latent.to(device, dtype)
+            s2v_ref_motion = s2v_audio_embeds.get("ref_motion", None)
+            if s2v_ref_motion is not None:
+                s2v_ref_motion = s2v_ref_motion.to(device, dtype)
+            s2v_pose = s2v_audio_embeds.get("pose_latent", None)
+            if s2v_pose is not None:
+                s2v_pose = s2v_pose.to(device, dtype)
+            
             s2v_num_repeat = s2v_audio_embeds.get("num_repeat", 1)
             vae = image_embeds.get("vae", None)
             framepack = False
-            #s2v_audio_input_all_layers = s2v_audio_embeds["audio_encoder_output"]["encoded_audio_all_layers"]
-            print(s2v_audio_input.shape)
-            ##print(s2v_audio_input_all_layers[0].shape)
 
         # vid2vid
         noise_mask=original_image=None
@@ -2700,7 +2706,8 @@ class WanVideoSampler:
                     "s2v_audio_input": s2v_audio_input, # official speech-to-video audio input
                     "s2v_ref_latent": s2v_ref_latent, # speech-to-video reference latent
                     "s2v_ref_motion": s2v_ref_motion, # speech-to-video reference motion latent
-                    "s2v_audio_scale": s2v_audio_scale if s2v_audio_input is not None else 1.0 # speech-to-video audio scale
+                    "s2v_audio_scale": s2v_audio_scale if s2v_audio_input is not None else 1.0, # speech-to-video audio scale
+                    "s2v_pose": s2v_pose if s2v_pose is not None else None # speech-to-video pose control
                 }
 
                 batch_size = 1
@@ -3664,7 +3671,78 @@ class WanVideoSampler:
                         except:
                             pass
                         return {"video": gen_video_samples.permute(1, 2, 3, 0)},
-                    
+                    elif framepack:
+                        framepack_out = []
+                        ref_motion_image = None
+                        motion_frames = 5
+                        infer_frames = image_embeds["num_frames"]
+
+                        for r in range(s2v_num_repeat):
+                            if ref_motion_image is not None:
+                                if ref_motion_image.shape[0] > 73:
+                                    ref_motion_image = ref_motion_image[-73:]
+
+                                if ref_motion_image.shape[0] < 73:
+                                    ref = torch.ones([73, ref_motion_image.shape[1], ref_motion_image.shape[2], 3]) * 0.5
+                                    ref[-ref_motion_image.shape[0]:] = ref_motion_image
+                                    ref_motion_image = ref
+
+                                vae.to(device)
+                                ref_motion = vae.encode(ref_motion_image[:, :, :, :3], device=device, pbar=False)[0].to(dtype)
+                                vae.to(offload_device)
+
+                            left_idx = r * infer_frames
+                            right_idx = r * infer_frames + infer_frames
+                            #cond_latents = COND[r] if pose_video else COND[0] * 0
+                            #cond_latents = cond_latents.to(dtype=self.param_dtype, device=self.device)
+                            s2v_audio_input = s2v_audio_embeds[..., left_idx:right_idx]
+                            input_motion_latents = ref_motion.clone()
+                                
+                            noise_pred, self.cache_state = predict_with_cfg(
+                                latent_model_input, 
+                                cfg[idx], 
+                                text_embeds["prompt_embeds"], 
+                                text_embeds["negative_prompt_embeds"], 
+                                timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
+                                cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens, 
+                                s2v_audio_input=s2v_audio_input, s2v_ref_motion=input_motion_latents)
+                            
+                            latent = sample_scheduler.step(
+                                    noise_pred.unsqueeze(0), timestep, latent.unsqueeze(0),
+                                    **scheduler_step_args)[0].squeeze(0)
+                            
+                            latents = torch.stack(latent)
+                            #if not (drop_first_motion and r == 0):
+                            #    decode_latents = torch.cat([motion_latents, latents], dim=2)
+                            #else:
+                            decode_latents = torch.cat([s2v_ref_latent, latents], dim=2)
+                            image = torch.stack(vae.decode(decode_latents), device=device)
+                            image = image[:, :, -(infer_frames):]
+                            #if (drop_first_motion and r == 0):
+                            #    image = image[:, :, 3:]
+
+                            overlap_frames_num = min(motion_frames, image.shape[2])
+                            videos_last_frames = torch.cat([
+                                videos_last_frames[:, :, overlap_frames_num:],
+                                image[:, :, -overlap_frames_num:]], dim=2).to(vae.device, vae.dtype)
+                          
+                            vae.to(device)
+                            ref_motion_image = torch.stack(vae.encode(videos_last_frames, device=device, pbar=False)[0])
+                            vae.to(device)  
+                            framepack_out.append(image.cpu())
+
+                        gen_video_samples = torch.cat(framepack_out, dim=1)
+
+                        if force_offload:
+                            if not model["auto_cpu_offload"]:
+                                offload_transformer(transformer)
+                        try:
+                            print_memory(device)
+                            torch.cuda.reset_peak_memory_stats(device)
+                        except:
+                            pass
+                        return {"video": gen_video_samples.permute(1, 2, 3, 0)},
+                        
                     #region normal inference
                     else:
                         noise_pred, self.cache_state = predict_with_cfg(
