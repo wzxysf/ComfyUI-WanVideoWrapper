@@ -804,7 +804,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             except Exception:
                 block_idx = None
 
-        if "loras" in name:
+        if "loras" in name or "controlnet" in name:
             continue
 
         # GGUF: skip GGUFParameter params
