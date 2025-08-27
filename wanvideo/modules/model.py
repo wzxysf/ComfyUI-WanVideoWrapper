@@ -30,7 +30,61 @@ from ...echoshot.echoshot import rope_apply_z, rope_apply_c, rope_apply_echoshot
 
 from ...MTV.mtv import apply_rotary_emb
 
-from .s2v.motioner import MotionerTransformers, FramePackMotioner, rope_precompute
+#from .s2v.motioner import MotionerTransformers, FramePackMotioner, rope_precompute
+
+#from comfy.ldm.wan.model import FramePackMotioner
+class FramePackMotioner(nn.Module):
+    def __init__(
+            self,
+            inner_dim=1024,
+            num_heads=16,  # Used to indicate the number of heads in the backbone network; unrelated to this module's design
+            zip_frame_buckets=[1, 2, 16],  # Three numbers representing the number of frames sampled for patch operations from the nearest to the farthest frames
+            drop_mode="drop",  # If not "drop", it will use "padd", meaning padding instead of deletion
+            dtype=None, device=None):
+        super().__init__()
+        self.proj = nn.Conv3d(16, inner_dim, kernel_size=(1, 2, 2), stride=(1, 2, 2), dtype=dtype, device=device)
+        self.proj_2x = nn.Conv3d(16, inner_dim, kernel_size=(2, 4, 4), stride=(2, 4, 4), dtype=dtype, device=device)
+        self.proj_4x = nn.Conv3d(16, inner_dim, kernel_size=(4, 8, 8), stride=(4, 8, 8), dtype=dtype, device=device)
+        self.zip_frame_buckets = zip_frame_buckets
+
+        self.inner_dim = inner_dim
+        self.num_heads = num_heads
+        self.drop_mode = drop_mode
+
+    def forward(self, motion_latents, rope_embedder, add_last_motion=2):
+        lat_height, lat_width = motion_latents.shape[3], motion_latents.shape[4]
+        padd_lat = torch.zeros(motion_latents.shape[0], 16, sum(self.zip_frame_buckets), lat_height, lat_width).to(device=motion_latents.device, dtype=motion_latents.dtype)
+        overlap_frame = min(padd_lat.shape[2], motion_latents.shape[2])
+        if overlap_frame > 0:
+            padd_lat[:, :, -overlap_frame:] = motion_latents[:, :, -overlap_frame:]
+
+        if add_last_motion < 2 and self.drop_mode != "drop":
+            zero_end_frame = sum(self.zip_frame_buckets[:len(self.zip_frame_buckets) - add_last_motion - 1])
+            padd_lat[:, :, -zero_end_frame:] = 0
+
+        clean_latents_4x, clean_latents_2x, clean_latents_post = padd_lat[:, :, -sum(self.zip_frame_buckets):, :, :].split(self.zip_frame_buckets[::-1], dim=2)  # 16, 2 ,1
+
+        # patchfy
+        clean_latents_post = self.proj(clean_latents_post).flatten(2).transpose(1, 2)
+        clean_latents_2x = self.proj_2x(clean_latents_2x)
+        l_2x_shape = clean_latents_2x.shape
+        clean_latents_2x = clean_latents_2x.flatten(2).transpose(1, 2)
+        clean_latents_4x = self.proj_4x(clean_latents_4x)
+        l_4x_shape = clean_latents_4x.shape
+        clean_latents_4x = clean_latents_4x.flatten(2).transpose(1, 2)
+
+        if add_last_motion < 2 and self.drop_mode == "drop":
+            clean_latents_post = clean_latents_post[:, :0] if add_last_motion < 2 else clean_latents_post
+            clean_latents_2x = clean_latents_2x[:, :0] if add_last_motion < 1 else clean_latents_2x
+
+        motion_lat = torch.cat([clean_latents_post, clean_latents_2x, clean_latents_4x], dim=1)
+
+        rope_post = rope_embedder.rope_encode(1, lat_height, lat_width, t_start=-1, device=motion_latents.device, dtype=motion_latents.dtype)
+        rope_2x = rope_embedder.rope_encode(1, lat_height, lat_width, t_start=-3, steps_h=l_2x_shape[-2], steps_w=l_2x_shape[-1], device=motion_latents.device, dtype=motion_latents.dtype)
+        rope_4x = rope_embedder.rope_encode(4, lat_height, lat_width, t_start=-19, steps_h=l_4x_shape[-2], steps_w=l_4x_shape[-1], device=motion_latents.device, dtype=motion_latents.dtype)
+
+        rope = torch.cat([rope_post, rope_2x, rope_4x], dim=1)
+        return motion_lat, rope
 
 from diffusers.models.attention import AdaLayerNorm
 
@@ -1301,7 +1355,8 @@ class AudioInjector_WAN(nn.Module):
                  root_net=None,
                  enable_adain=False,
                  adain_dim=2048,
-                 need_adain_ont=False):
+                 need_adain_ont=False,
+                 attention_mode='sdpa'):
         super().__init__()
         self.injected_block_id = {}
         audio_injector_id = 0
@@ -1318,6 +1373,7 @@ class AudioInjector_WAN(nn.Module):
                 out_features=dim,
                 num_heads=num_heads,
                 qk_norm=True,
+                attention_mode=attention_mode
             ) for _ in range(audio_injector_id)
         ])
         self.injector_pre_norm_feat = nn.ModuleList([
@@ -1592,7 +1648,7 @@ class WanModel(torch.nn.Module):
         self.block_mask=None
 
         #S2V
-        self.zero_timestep = self.audio_injector = None
+        self.zero_timestep = self.audio_injector = self.trainable_cond_mask =None
         if cond_dim > 0:
             self.cond_encoder = nn.Conv3d(
                 cond_dim,
@@ -1618,6 +1674,7 @@ class WanModel(torch.nn.Module):
                 enable_adain=enable_adain,
                 adain_dim=self.dim,
                 need_adain_ont=adain_mode != "attn_norm",
+                attention_mode=attention_mode
             )
             self.trainable_cond_mask = nn.Embedding(3, self.dim)
         self.adain_mode = adain_mode
@@ -1633,29 +1690,29 @@ class WanModel(torch.nn.Module):
             )
         self.enable_motioner = enable_motioner
         self.add_last_motion = add_last_motion
-        if enable_motioner:
-            motioner_dim = 2048
-            self.motioner = MotionerTransformers(
-                patch_size=(2, 4, 4),
-                dim=motioner_dim,
-                ffn_dim=motioner_dim,
-                freq_dim=256,
-                out_dim=16,
-                num_heads=16,
-                num_layers=13,
-                window_size=(-1, -1),
-                qk_norm=True,
-                cross_attn_norm=False,
-                eps=1e-6,
-                motion_token_num=4,
-                enable_tsm=False,
-                motion_stride=4,
-                expand_ratio=2,
-                trainable_token_pos_emb=False,
-            )
-            self.zip_motion_out = torch.nn.Sequential(
-                WanLayerNorm(motioner_dim),
-                zero_module(nn.Linear(motioner_dim, self.dim)))
+        # if enable_motioner:
+        #     motioner_dim = 2048
+        #     self.motioner = MotionerTransformers(
+        #         patch_size=(2, 4, 4),
+        #         dim=motioner_dim,
+        #         ffn_dim=motioner_dim,
+        #         freq_dim=256,
+        #         out_dim=16,
+        #         num_heads=16,
+        #         num_layers=13,
+        #         window_size=(-1, -1),
+        #         qk_norm=True,
+        #         cross_attn_norm=False,
+        #         eps=1e-6,
+        #         motion_token_num=4,
+        #         enable_tsm=False,
+        #         motion_stride=4,
+        #         expand_ratio=2,
+        #         trainable_token_pos_emb=False,
+        #     )
+        #     self.zip_motion_out = torch.nn.Sequential(
+        #         WanLayerNorm(motioner_dim),
+        #         zero_module(nn.Linear(motioner_dim, self.dim)))
 
         self.enable_framepack = enable_framepack
         if enable_framepack:
@@ -1663,7 +1720,9 @@ class WanModel(torch.nn.Module):
                 inner_dim=self.dim,
                 num_heads=self.num_heads,
                 zip_frame_buckets=[1, 2, 16],
-                drop_mode='padd')
+                drop_mode='padd',
+                device=self.main_device,
+                dtype=self.dtype)
 
     @staticmethod
     def _prepare_blockwise_causal_attn_mask(
@@ -1985,6 +2044,52 @@ class WanModel(torch.nn.Module):
             x[:, :self.original_seq_len].add_(residual_out)
 
         return x
+    
+    def rope_encode_comfy(self, t, h, w, freq_offset=0, t_start=0, attn_cond=None, steps_t=None, steps_h=None, steps_w=None, ntk_alphas=[1,1,1], device=None, dtype=None):
+        patch_size = self.patch_size
+        t_len = ((t + (patch_size[0] // 2)) // patch_size[0])
+        h_len = ((h + (patch_size[1] // 2)) // patch_size[1])
+        w_len = ((w + (patch_size[2] // 2)) // patch_size[2])
+
+        if steps_t is None:
+            steps_t = t_len
+        if steps_h is None:
+            steps_h = h_len
+        if steps_w is None:
+            steps_w = w_len
+
+        img_ids = torch.zeros((steps_t, steps_h, steps_w, 3), device=device, dtype=dtype)
+        img_ids[:, :, :, 0] = img_ids[:, :, :, 0] + torch.linspace(t_start+freq_offset, t_start + (t_len - 1), steps=steps_t, device=device, dtype=dtype).reshape(-1, 1, 1)
+        img_ids[:, :, :, 1] = img_ids[:, :, :, 1] + torch.linspace(freq_offset, h_len - 1, steps=steps_h, device=device, dtype=dtype).reshape(1, -1, 1)
+        img_ids[:, :, :, 2] = img_ids[:, :, :, 2] + torch.linspace(freq_offset, w_len - 1, steps=steps_w, device=device, dtype=dtype).reshape(1, 1, -1)
+        img_ids = img_ids.reshape(1, -1, img_ids.shape[-1])
+        if attn_cond is not None:
+            F_cond, H_cond, W_cond = attn_cond.shape[2], attn_cond.shape[3], attn_cond.shape[4]
+            cond_f_len = ((F_cond + (self.patch_size[0] // 2)) // self.patch_size[0])
+            cond_h_len = ((H_cond + (self.patch_size[1] // 2)) // self.patch_size[1])
+            cond_w_len = ((W_cond + (self.patch_size[2] // 2)) // self.patch_size[2])
+            cond_img_ids = torch.zeros((cond_f_len, cond_h_len, cond_w_len, 3), device=device, dtype=dtype)
+            
+            #shift
+            shift_f_size = 81 # Default value
+            shift_f = False
+            if shift_f:
+                cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(shift_f_size, shift_f_size + cond_f_len - 1,steps=cond_f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
+            else:
+                cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(0, cond_f_len - 1, steps=cond_f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
+            cond_img_ids[:, :, :, 1] = cond_img_ids[:, :, :, 1] + torch.linspace(h_len, h_len + cond_h_len - 1, steps=cond_h_len, device=x.device, dtype=x.dtype).reshape(1, -1, 1)
+            cond_img_ids[:, :, :, 2] = cond_img_ids[:, :, :, 2] + torch.linspace(w_len, w_len + cond_w_len - 1, steps=cond_w_len, device=x.device, dtype=x.dtype).reshape(1, 1, -1)
+        
+            # Combine original and conditional position ids
+            img_ids = repeat(img_ids, "t h w c -> b (t h w) c", b=1)
+            cond_img_ids = repeat(cond_img_ids, "t h w c -> b (t h w) c", b=1)
+            combined_img_ids = torch.cat([img_ids, cond_img_ids], dim=1)
+            
+            # Generate RoPE frequencies for the combined positions
+            freqs = self.rope_embedder(combined_img_ids, ntk_alphas).movedim(1, 2)
+        else:
+            freqs = self.rope_embedder(img_ids, ntk_alphas).movedim(1, 2)
+        return freqs
 
     def forward(
         self,
@@ -2033,7 +2138,7 @@ class WanModel(torch.nn.Module):
         s2v_audio_input=None,
         s2v_ref_latent=None,
         s2v_audio_scale=1.0,
-        motion_latents=None
+        s2v_ref_motion=None
 
     ):
         r"""
@@ -2081,6 +2186,8 @@ class WanModel(torch.nn.Module):
 
         #s2v
         if self.model_type == 's2v' and s2v_audio_input is not None:
+            if is_uncond:
+                s2v_audio_input = s2v_audio_input * 0 # to match original code
             #motion_frames=[17, 5]
             motion_frames=[1, 0]
             s2v_audio_input = torch.cat([s2v_audio_input[..., 0:1].repeat(1, 1, 1, motion_frames[0]), s2v_audio_input], dim=-1)
@@ -2092,7 +2199,6 @@ class WanModel(torch.nn.Module):
             else:
                 audio_emb = audio_emb_res
             merged_audio_emb = audio_emb[:, motion_frames[1]:, :]
-
 
         # params
         device = self.patch_embedding.weight.device
@@ -2147,16 +2253,16 @@ class WanModel(torch.nn.Module):
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
         assert seq_lens.max() <= seq_len
 
-        x_len = x[0].shape[1]
+        if self.trainable_cond_mask is not None:
+            cond_mask_weight = self.trainable_cond_mask.weight.to(x[0]).unsqueeze(1).unsqueeze(1)
 
-        self.original_seq_len = x[0].size(1)
+        self.original_seq_len = x[0].shape[1]
 
         if add_cond is not None:
             add_cond = self.add_conv_in(add_cond.to(self.add_conv_in.weight.dtype)).to(x[0].dtype)
             add_cond = add_cond.flatten(2).transpose(1, 2)
             x[0] = x[0] + self.add_proj(add_cond)
         if attn_cond is not None:
-            F_cond, H_cond, W_cond = attn_cond.shape[2], attn_cond.shape[3], attn_cond.shape[4]
             grid_sizes = torch.stack([torch.tensor([u[0] + 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
             attn_cond = self.attn_conv_in(attn_cond.to(self.attn_conv_in.weight.dtype)).to(x[0].dtype)
             attn_cond = attn_cond.flatten(2).transpose(1, 2)
@@ -2177,13 +2283,16 @@ class WanModel(torch.nn.Module):
             end_ref_latent = s2v_ref_latent.squeeze(0)
         elif phantom_ref is not None:
             end_ref_latent = phantom_ref
+            F += end_ref_latent_frames
         if end_ref_latent is not None:
             end_ref_latent_frames = end_ref_latent.size(1)
-            end_ref_latent = self.original_patch_embedding(end_ref_latent.unsqueeze(0).to(torch.float32)).flatten(2).transpose(1, 2).to(x[0].dtype)
+            end_ref_latent = self.original_patch_embedding(end_ref_latent.unsqueeze(0).to(torch.float32)).to(x[0].dtype)
+            end_ref_latent = end_ref_latent.flatten(2).transpose(1, 2)
+            if cond_mask_weight is not None:
+                end_ref_latent = end_ref_latent + cond_mask_weight[1]
             grid_sizes = torch.stack([torch.tensor([u[0] + end_ref_latent_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
             end_ref_latent_seq_len = end_ref_latent.size(1)
             seq_len += end_ref_latent_seq_len
-            F += end_ref_latent_frames
             x = [torch.cat([u, end_ref_latent.unsqueeze(0)], dim=1) for end_ref_latent, u in zip(end_ref_latent, x)]
 
         grid_sizes = grid_sizes
@@ -2191,6 +2300,9 @@ class WanModel(torch.nn.Module):
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
                     dim=1) for u in x
         ])
+
+        if self.trainable_cond_mask is not None:
+            x = x + cond_mask_weight[0]
 
         # StandIn LoRA input
         x_ip = None
@@ -2208,10 +2320,9 @@ class WanModel(torch.nn.Module):
 
         if freqs is None: #comfy rope
             current_shape = (F, H, W)
+           
             has_cond = attn_cond is not None
-            f_len = ((F + (self.patch_size[0] // 2)) // self.patch_size[0])
-            h_len = ((H + (self.patch_size[1] // 2)) // self.patch_size[1])
-            w_len = ((W + (self.patch_size[2] // 2)) // self.patch_size[2])
+
             if (self.cached_freqs is not None and 
                 self.cached_shape == current_shape and 
                 self.cached_cond == has_cond and
@@ -2220,37 +2331,14 @@ class WanModel(torch.nn.Module):
                 ):
                 freqs = self.cached_freqs
             else:
-                img_ids = torch.zeros((f_len, h_len, w_len, 3), device=x.device, dtype=x.dtype)
-                img_ids[:, :, :, 0] = img_ids[:, :, :, 0] + torch.linspace(freq_offset, f_len + freq_offset - 1, steps=f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
-                img_ids[:, :, :, 1] = img_ids[:, :, :, 1] + torch.linspace(freq_offset, h_len + freq_offset - 1, steps=h_len, device=x.device, dtype=x.dtype).reshape(1, -1, 1)
-                img_ids[:, :, :, 2] = img_ids[:, :, :, 2] + torch.linspace(freq_offset, w_len + freq_offset - 1, steps=w_len, device=x.device, dtype=x.dtype).reshape(1, 1, -1)
-
-                if attn_cond is not None:   
-                    cond_f_len = ((F_cond + (self.patch_size[0] // 2)) // self.patch_size[0])
-                    cond_h_len = ((H_cond + (self.patch_size[1] // 2)) // self.patch_size[1])
-                    cond_w_len = ((W_cond + (self.patch_size[2] // 2)) // self.patch_size[2])
-                    cond_img_ids = torch.zeros((cond_f_len, cond_h_len, cond_w_len, 3), device=x.device, dtype=x.dtype)
-                    
-                    #shift
-                    shift_f_size = 81 # Default value
-                    shift_f = False
-                    if shift_f:
-                        cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(shift_f_size, shift_f_size + cond_f_len - 1,steps=cond_f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
-                    else:
-                        cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(0, cond_f_len - 1, steps=cond_f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
-                    cond_img_ids[:, :, :, 1] = cond_img_ids[:, :, :, 1] + torch.linspace(h_len, h_len + cond_h_len - 1, steps=cond_h_len, device=x.device, dtype=x.dtype).reshape(1, -1, 1)
-                    cond_img_ids[:, :, :, 2] = cond_img_ids[:, :, :, 2] + torch.linspace(w_len, w_len + cond_w_len - 1, steps=cond_w_len, device=x.device, dtype=x.dtype).reshape(1, 1, -1)
-                
-                    # Combine original and conditional position ids
-                    img_ids = repeat(img_ids, "t h w c -> b (t h w) c", b=1)
-                    cond_img_ids = repeat(cond_img_ids, "t h w c -> b (t h w) c", b=1)
-                    combined_img_ids = torch.cat([img_ids, cond_img_ids], dim=1)
-                    
-                    # Generate RoPE frequencies for the combined positions
-                    freqs = self.rope_embedder(combined_img_ids, ntk_alphas).movedim(1, 2)
-                else:
-                    img_ids = repeat(img_ids, "t h w c -> b (t h w) c", b=1)
-                    freqs = self.rope_embedder(img_ids, ntk_alphas).movedim(1, 2)
+                freqs = self.rope_encode_comfy(F, H, W, freq_offset=freq_offset, ntk_alphas=ntk_alphas, attn_cond=attn_cond, device=x.device, dtype=x.dtype)
+                if s2v_ref_latent is not None:
+                    freqs_ref = self.rope_encode_comfy(
+                        s2v_ref_latent.shape[2], 
+                        s2v_ref_latent.shape[3], 
+                        s2v_ref_latent.shape[4], 
+                        t_start=30, device=x.device, dtype=x.dtype)
+                    freqs = torch.cat([freqs, freqs_ref], dim=1)
 
                 self.cached_freqs = freqs
                 self.cached_shape = current_shape
@@ -2261,6 +2349,8 @@ class WanModel(torch.nn.Module):
         # Stand-In RoPE frequencies
         if x_ip is not None:
             # Generate RoPE frequencies for x_ip
+            h_len = (H + 1) // 2
+            w_len = (W + 1) // 2
             ip_img_ids = torch.zeros((f_ip, h_ip, w_ip, 3), device=x.device, dtype=x.dtype)
             ip_img_ids[:, :, :, 0] = ip_img_ids[:, :, :, 0] + torch.linspace(0, f_ip - 1, steps=f_ip, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
             ip_img_ids[:, :, :, 1] = ip_img_ids[:, :, :, 1] + torch.linspace(h_len + freq_offset, h_len + freq_offset + h_ip - 1, steps=h_ip, device=x.device, dtype=x.dtype).reshape(1, -1, 1)
@@ -2274,6 +2364,15 @@ class WanModel(torch.nn.Module):
         if inner_t is not None:
             d = self.dim // self.num_heads
             self.cross_freqs = rope_params(100, d).to(device=x.device)
+
+        if s2v_ref_motion is not None:
+            motion_encoded, freqs_motion = self.frame_packer(s2v_ref_motion, self)
+            motion_encoded = motion_encoded + cond_mask_weight[2]
+            x = torch.cat([x, motion_encoded], dim=1)
+            freqs = torch.cat([freqs, freqs_motion], dim=1)
+
+            t = torch.repeat_interleave(t, 2, dim=1)
+            t = torch.cat([t, torch.zeros((t.shape[0], 3), device=t.device, dtype=t.dtype)], dim=1)
 
         # time embeddings
         if t.dim() == 2:
@@ -2298,37 +2397,6 @@ class WanModel(torch.nn.Module):
                 zero_e0.unsqueeze(2).repeat(e0.size(0), 1, 1, 1)
             ], dim=2)
             e0 = [e0, self.original_seq_len]
-
-            mask_input = torch.zeros([1, x.shape[1]], dtype=torch.int32, device=x.device)
-            mask_input[:, self.original_seq_len:] = 1
-
-
-            if motion_latents is not None:
-                # compute the rope embeddings for the input
-                #x = torch.cat(x)
-                b, s, n, d = x.size(0), x.size(
-                    1), self.num_heads, self.dim // self.num_heads
-                self.pre_compute_freqs = rope_precompute(
-                    x.detach().view(b, s, n, d), grid_sizes, freqs, start=None)
-
-                x = [u.unsqueeze(0) for u in x]
-                self.pre_compute_freqs = [
-                    u.unsqueeze(0) for u in self.pre_compute_freqs
-                ]
-                x, seq_lens, self.pre_compute_freqs, mask_input = self.inject_motion(
-                    x,
-                    seq_lens,
-                    self.pre_compute_freqs,
-                    mask_input,
-                    motion_latents,
-                    drop_motion_frames=self.drop_motion_frames,
-                    add_last_motion=True)
-
-                x = torch.cat(x, dim=0)
-                self.pre_compute_freqs = torch.cat(self.pre_compute_freqs, dim=0)
-                mask_input = torch.cat(mask_input, dim=0)
-            
-            x = x + self.trainable_cond_mask(mask_input).to(x.dtype)
 
         if x_ip is not None:
             timestep_ip = torch.zeros_like(t)  # [B] with 0s
@@ -2718,7 +2786,7 @@ class WanModel(torch.nn.Module):
             grid_sizes = torch.stack([torch.tensor([u[0] - end_ref_latent_frames, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
         if attn_cond is not None:
-            x = x[:, :x_len]
+            x = x[:, :self.original_seq_len]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
         #x = x[:, :self.original_seq_len]

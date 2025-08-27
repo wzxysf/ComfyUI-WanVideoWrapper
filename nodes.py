@@ -2224,15 +2224,18 @@ class WanVideoSampler:
 
         #region S2V
         s2v_audio_input = s2v_ref_latent = None
+        framepack = False
         s2v_audio_embeds = image_embeds.get("audio_embeds", None)
         if s2v_audio_embeds is not None:
             log.info(f"Using S2V audio embeddings")
             s2v_audio_input = s2v_audio_embeds["audio_embed_bucket"].to(device, dtype)
             s2v_audio_scale = s2v_audio_embeds["audio_scale"]
-            s2v_ref_latent = s2v_audio_embeds["ref_latent"]
-            if s2v_ref_latent is not None:
-                s2v_ref_latent = s2v_ref_latent.to(device, dtype)
+            s2v_ref_latent = s2v_audio_embeds["ref_latent"].to(device, dtype) if "ref_latent" in s2v_audio_embeds else None
+            s2v_ref_motion = s2v_audio_embeds["ref_motion"].to(device, dtype) if "ref_motion" in s2v_audio_embeds else None
             s2v_audio_input = s2v_audio_input[..., 0:image_embeds["num_frames"]]
+            s2v_num_repeat = s2v_audio_embeds.get("num_repeat", 1)
+            vae = image_embeds.get("vae", None)
+            framepack = False
             #s2v_audio_input_all_layers = s2v_audio_embeds["audio_encoder_output"]["encoded_audio_all_layers"]
             print(s2v_audio_input.shape)
             ##print(s2v_audio_input_all_layers[0].shape)
@@ -2516,7 +2519,7 @@ class WanVideoSampler:
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None, 
                              control_latents=None, vace_data=None, unianim_data=None, audio_proj=None, control_camera_latents=None, 
                              add_cond=None, cache_state=None, context_window=None, multitalk_audio_embeds=None, fantasy_portrait_input=None, reverse_time=False,
-                             mtv_motion_tokens=None, s2v_audio_input=None):
+                             mtv_motion_tokens=None, s2v_audio_input=None, s2v_ref_motion=None):
             nonlocal transformer
             z = z.to(dtype)
             autocast_enabled = ("fp8" in model["quantization"] and not transformer.patched_linear)
@@ -2696,6 +2699,7 @@ class WanVideoSampler:
                     "mtv_freqs": mtv_freqs if mtv_input is not None else None, # MTV-Crafter extra RoPE freqs
                     "s2v_audio_input": s2v_audio_input, # official speech-to-video audio input
                     "s2v_ref_latent": s2v_ref_latent, # speech-to-video reference latent
+                    "s2v_ref_motion": s2v_ref_motion, # speech-to-video reference motion latent
                     "s2v_audio_scale": s2v_audio_scale if s2v_audio_input is not None else 1.0 # speech-to-video audio scale
                 }
 
@@ -3211,14 +3215,12 @@ class WanVideoSampler:
 
                             partial_s2v_audio_input = None
                             if s2v_audio_input is not None:
-                                audio_indices = []
-                                max_audio_index = s2v_audio_input.shape[-1]
-                                for i in c:
-                                    for j in range(4):
-                                        i_ = i * 4 + j
-                                        if i_ < max_audio_index:
-                                            audio_indices.append(i_)
-                                partial_s2v_audio_input = s2v_audio_input[..., audio_indices]
+                                indices = (torch.arange(4 + 1) - 2) * 1
+                                audio_start = c[0] * 4
+                                audio_end = c[-1] * 4 + 1
+                                center_indices = torch.arange(audio_start, audio_end, 1)
+                                center_indices = torch.clamp(center_indices, min=0, max=s2v_audio_input.shape[-1] - 1)
+                                partial_s2v_audio_input = s2v_audio_input[..., center_indices]
 
                             partial_add_cond = None
                             if add_cond is not None:
@@ -3245,7 +3247,7 @@ class WanVideoSampler:
                             window_mask = create_window_mask(noise_pred_context, c, latent_video_length, context_overlap, looped=is_looped, window_type=context_options["fuse_method"])                    
                             noise_pred[:, c] += noise_pred_context * window_mask
                             counter[:, c] += window_mask
-                            context_pbar.update_absolute(step_start_progress + (i + 1) * fraction_per_context, steps)
+                            context_pbar.update_absolute(step_start_progress + (i + 1) * fraction_per_context, len(timesteps))
                         noise_pred /= counter
                     #region multitalk
                     elif multitalk_sampling:
@@ -3544,7 +3546,7 @@ class WanVideoSampler:
                                     latent_model_input[:, :cur_motion_frames_latent_num] = latent_motion_frames
 
                                 noise_pred, self.cache_state = predict_with_cfg(
-                                    latent_model_input, cfg[i], positive, text_embeds["negative_prompt_embeds"], 
+                                    latent_model_input, cfg[min(i, len(timesteps)-1)], positive, text_embeds["negative_prompt_embeds"],
                                     timestep, i, y, clip_embeds, control_latents, window_vace_data, partial_unianim_data, audio_proj, control_camera_latents, add_cond,
                                     cache_state=self.cache_state, multitalk_audio_embeds=audio_embs, fantasy_portrait_input=partial_fantasy_portrait_input)
 
