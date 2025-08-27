@@ -1608,7 +1608,7 @@ class WanVideoScheduler: #WIP
     EXPERIMENTAL = True
 
     def process(self, scheduler, steps, start_step, end_step, shift, unique_id, sigmas=None):
-        sample_scheduler, timesteps = get_scheduler(
+        sample_scheduler, timesteps, start_idx, end_idx = get_scheduler(
             scheduler, 
             steps, 
             start_step, end_step, shift, 
@@ -1642,8 +1642,12 @@ class WanVideoScheduler: #WIP
                 ax.tick_params(axis='x', colors='white')        # X tick color
                 ax.tick_params(axis='y', colors='white')        # Y tick color
                 # Add split point if end_step is defined
-                if end_step != -1 and 0 <= end_step < len(sigmas_np):
-                    ax.axvline(end_step, color='red', linestyle='--', linewidth=2, label='end_step split')
+                if end_idx != -1 and 0 <= end_idx < len(sigmas_np):
+                    ax.axvline(end_idx, color='red', linestyle='--', linewidth=2, label='end_step split')
+                # Add split point if start_step is defined
+                if start_idx > 0 and 0 <= start_idx < len(sigmas_np):
+                    ax.axvline(start_idx, color='green', linestyle='--', linewidth=2, label='start_step split')
+                if (end_idx != -1 and 0 <= end_idx < len(sigmas_np)) or (start_idx > 0 and 0 <= start_idx < len(sigmas_np)):
                     ax.legend()
                 plt.tight_layout()
                 plt.savefig(buf, format='png')
@@ -1815,7 +1819,7 @@ class WanVideoSampler:
             sample_scheduler = scheduler["sample_scheduler"]
             timesteps = scheduler["timesteps"]
         elif scheduler != "multitalk":
-            sample_scheduler, timesteps = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
+            sample_scheduler, timesteps,_,_ = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
             log.info(f"sigmas: {sample_scheduler.sigmas}")
         else:
             timesteps = torch.tensor([1000, 750, 500, 250], device=device)
@@ -2886,7 +2890,7 @@ class WanVideoSampler:
             # FreeInit noise reinitialization (after first iteration)
             if freeinit_args is not None and iter_idx > 0:
                 # restart scheduler for each iteration
-                sample_scheduler, timesteps = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
+                sample_scheduler, timesteps,_,_ = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
 
                 # Re-apply start_step and end_step logic to timesteps and sigmas
                 if end_step != -1:
@@ -3414,7 +3418,7 @@ class WanVideoSampler:
                                 timesteps = [torch.tensor([t], device=device) for t in timesteps]
                                 timesteps = [timestep_transform(t, shift=shift, num_timesteps=1000) for t in timesteps]
                             else:
-                                sample_scheduler, timesteps = get_scheduler(scheduler, total_steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
+                                sample_scheduler, timesteps,_,_ = get_scheduler(scheduler, total_steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas)
                                 timesteps = [torch.tensor([float(t)], device=device) for t in timesteps] + [torch.tensor([0.], device=device)]
                             
                             # sample videos

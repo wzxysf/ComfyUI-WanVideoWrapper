@@ -139,4 +139,4 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
     if hasattr(sample_scheduler, 'timesteps'):
         sample_scheduler.timesteps = timesteps
 
-    return sample_scheduler, timesteps
+    return sample_scheduler, timesteps, start_idx, end_idx

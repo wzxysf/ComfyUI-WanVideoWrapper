@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from comfy.utils import common_upscale
+from .utils import log
 
 try:
     from server import PromptServer
