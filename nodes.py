@@ -45,6 +45,8 @@ def offload_transformer(transformer):
     
     if transformer.patched_linear:
         for name, param in transformer.named_parameters():
+            if "controlnet" in name:
+                continue
             module = transformer
             subnames = name.split('.')
             for subname in subnames[:-1]:
