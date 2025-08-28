@@ -731,7 +731,8 @@ class WanVideoSetLoRAs:
 
 def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
                  transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
-    params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", "adapter", "add", "ref_conv", "audio", "cond_encoder"}
+    params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", 
+                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer"}
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     cnt = 0
@@ -878,6 +879,7 @@ def patch_stand_in_lora(transformer, lora_sd, transformer_load_device, base_dtyp
 
 def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
     unianimate_sd = None
+    control_lora=False
     #spacepxl's control LoRA patch
     for l in lora:
         log.info(f"Loading LoRA: {l['name']} with strength: {l['strength']}")
@@ -904,7 +906,6 @@ def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
         # Filter out any LoRA keys containing 'img' if the base model state_dict has no 'img' keys
         #if not any('img' in k for k in sd.keys()):
         #    lora_sd = {k: v for k, v in lora_sd.items() if 'img' not in k}
-        control_lora=False
         if "diffusion_model.patch_embedding.lora_A.weight" in lora_sd:
             control_lora = True
         #stand-in LoRA patch

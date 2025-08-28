@@ -40,11 +40,11 @@ class FramePackMotioner(nn.Module):
             num_heads=16,  # Used to indicate the number of heads in the backbone network; unrelated to this module's design
             zip_frame_buckets=[1, 2, 16],  # Three numbers representing the number of frames sampled for patch operations from the nearest to the farthest frames
             drop_mode="drop",  # If not "drop", it will use "padd", meaning padding instead of deletion
-            dtype=None, device=None):
+            ):
         super().__init__()
-        self.proj = nn.Conv3d(16, inner_dim, kernel_size=(1, 2, 2), stride=(1, 2, 2), dtype=dtype, device=device)
-        self.proj_2x = nn.Conv3d(16, inner_dim, kernel_size=(2, 4, 4), stride=(2, 4, 4), dtype=dtype, device=device)
-        self.proj_4x = nn.Conv3d(16, inner_dim, kernel_size=(4, 8, 8), stride=(4, 8, 8), dtype=dtype, device=device)
+        self.proj = nn.Conv3d(16, inner_dim, kernel_size=(1, 2, 2), stride=(1, 2, 2))
+        self.proj_2x = nn.Conv3d(16, inner_dim, kernel_size=(2, 4, 4), stride=(2, 4, 4))
+        self.proj_4x = nn.Conv3d(16, inner_dim, kernel_size=(4, 8, 8), stride=(4, 8, 8))
         self.zip_frame_buckets = zip_frame_buckets
 
         self.inner_dim = inner_dim
@@ -79,9 +79,9 @@ class FramePackMotioner(nn.Module):
 
         motion_lat = torch.cat([clean_latents_post, clean_latents_2x, clean_latents_4x], dim=1)
 
-        rope_post = rope_embedder.rope_encode(1, lat_height, lat_width, t_start=-1, device=motion_latents.device, dtype=motion_latents.dtype)
-        rope_2x = rope_embedder.rope_encode(1, lat_height, lat_width, t_start=-3, steps_h=l_2x_shape[-2], steps_w=l_2x_shape[-1], device=motion_latents.device, dtype=motion_latents.dtype)
-        rope_4x = rope_embedder.rope_encode(4, lat_height, lat_width, t_start=-19, steps_h=l_4x_shape[-2], steps_w=l_4x_shape[-1], device=motion_latents.device, dtype=motion_latents.dtype)
+        rope_post = rope_embedder.rope_encode_comfy(1, lat_height, lat_width, t_start=-1, device=motion_latents.device, dtype=motion_latents.dtype)
+        rope_2x = rope_embedder.rope_encode_comfy(1, lat_height, lat_width, t_start=-3, steps_h=l_2x_shape[-2], steps_w=l_2x_shape[-1], device=motion_latents.device, dtype=motion_latents.dtype)
+        rope_4x = rope_embedder.rope_encode_comfy(4, lat_height, lat_width, t_start=-19, steps_h=l_4x_shape[-2], steps_w=l_4x_shape[-1], device=motion_latents.device, dtype=motion_latents.dtype)
 
         rope = torch.cat([rope_post, rope_2x, rope_4x], dim=1)
         return motion_lat, rope
@@ -1714,15 +1714,13 @@ class WanModel(torch.nn.Module):
         #         WanLayerNorm(motioner_dim),
         #         zero_module(nn.Linear(motioner_dim, self.dim)))
 
-        self.enable_framepack = enable_framepack
+        enable_framepack = True
         if enable_framepack:
             self.frame_packer = FramePackMotioner(
                 inner_dim=self.dim,
                 num_heads=self.num_heads,
                 zip_frame_buckets=[1, 2, 16],
-                drop_mode='padd',
-                device=self.main_device,
-                dtype=self.dtype)
+                drop_mode='padd')
 
     @staticmethod
     def _prepare_blockwise_causal_attn_mask(
@@ -2139,7 +2137,8 @@ class WanModel(torch.nn.Module):
         s2v_ref_latent=None,
         s2v_audio_scale=1.0,
         s2v_ref_motion=None,
-        s2v_pose=None
+        s2v_pose=None,
+        s2v_motion_frames=[1, 0],
 
     ):
         r"""
@@ -2189,17 +2188,15 @@ class WanModel(torch.nn.Module):
         if self.model_type == 's2v' and s2v_audio_input is not None:
             if is_uncond:
                 s2v_audio_input = s2v_audio_input * 0 # to match original code
-            #motion_frames=[17, 5]
-            motion_frames=[1, 0]
-            s2v_audio_input = torch.cat([s2v_audio_input[..., 0:1].repeat(1, 1, 1, motion_frames[0]), s2v_audio_input], dim=-1)
+            s2v_audio_input = torch.cat([s2v_audio_input[..., 0:1].repeat(1, 1, 1, s2v_motion_frames[0]), s2v_audio_input], dim=-1)
             
             audio_emb_res = self.casual_audio_encoder(s2v_audio_input)
             if self.enable_adain:
                 audio_emb_global, audio_emb = audio_emb_res
-                self.audio_emb_global = audio_emb_global[:, motion_frames[1]:].clone()
+                self.audio_emb_global = audio_emb_global[:, s2v_motion_frames[1]:].clone()
             else:
                 audio_emb = audio_emb_res
-            merged_audio_emb = audio_emb[:, motion_frames[1]:, :]
+            merged_audio_emb = audio_emb[:, s2v_motion_frames[1]:, :]
 
         # params
         device = self.patch_embedding.weight.device
@@ -2245,16 +2242,14 @@ class WanModel(torch.nn.Module):
             ]
         
         if s2v_pose is not None:
-            print("s2v_pose.shape:", s2v_pose.shape)
-            print("x[0].shape:", x[0].shape)
             x[0] = x[0] + self.cond_encoder(s2v_pose.to(self.cond_encoder.weight.dtype)).to(x[0].dtype)
 
-        
         if self.control_adapter is not None and fun_camera is not None:
             fun_camera = self.control_adapter(fun_camera)
             x = [u + v for u, v in zip(x, fun_camera)]
 
         grid_sizes = torch.stack([torch.tensor(u.shape[2:], device=device, dtype=torch.long) for u in x])
+        original_grid_sizes = grid_sizes.clone()
         x = [u.flatten(2).transpose(1, 2) for u in x]
 
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
@@ -2302,7 +2297,7 @@ class WanModel(torch.nn.Module):
             seq_len += end_ref_latent_seq_len
             x = [torch.cat([u, end_ref_latent.unsqueeze(0)], dim=1) for end_ref_latent, u in zip(end_ref_latent, x)]
 
-        grid_sizes = grid_sizes
+        
         x = torch.cat([
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
                     dim=1) for u in x
@@ -2344,7 +2339,7 @@ class WanModel(torch.nn.Module):
                         s2v_ref_latent.shape[2], 
                         s2v_ref_latent.shape[3], 
                         s2v_ref_latent.shape[4], 
-                        t_start=30, device=x.device, dtype=x.dtype)
+                        t_start=max(30, F + 9), device=x.device, dtype=x.dtype)
                     freqs = torch.cat([freqs, freqs_ref], dim=1)
 
                 self.cached_freqs = freqs
@@ -2746,10 +2741,10 @@ class WanModel(torch.nn.Module):
 
                 #uni3c controlnet
                 if pdc_controlnet_states is not None and b < len(pdc_controlnet_states):
-                    x[:, :x_len] += pdc_controlnet_states[b].to(x) * pcd_data["controlnet_weight"]
+                    x[:, :self.original_seq_len] += pdc_controlnet_states[b].to(x) * pcd_data["controlnet_weight"]
                 #controlnet
                 if (controlnet is not None) and (b % controlnet["controlnet_stride"] == 0) and (b // controlnet["controlnet_stride"] < len(controlnet["controlnet_states"])):
-                    x[:, :x_len] += controlnet["controlnet_states"][b // controlnet["controlnet_stride"]].to(x) * controlnet["controlnet_weight"]
+                    x[:, :self.original_seq_len] += controlnet["controlnet_states"][b // controlnet["controlnet_stride"]].to(x) * controlnet["controlnet_weight"]
 
             if self.enable_teacache and (self.teacache_start_step <= current_step <= self.teacache_end_step) and pred_id is not None:
                 self.teacache_state.update(
@@ -2796,9 +2791,11 @@ class WanModel(torch.nn.Module):
             x = x[:, :self.original_seq_len]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
 
-        #x = x[:, :self.original_seq_len]
+        
+        x = x[:, :self.original_seq_len]
+
         x = self.head(x, e.to(x.device))
-        x = self.unpatchify(x, grid_sizes) # type: ignore[arg-type]
+        x = self.unpatchify(x, original_grid_sizes) # type: ignore[arg-type]
         x = [u.float() for u in x]
         return (x, pred_id) if pred_id is not None else (x, None)
 

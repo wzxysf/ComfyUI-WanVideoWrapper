@@ -46,53 +46,63 @@ def linear_interpolation(features, input_fps, output_fps, output_len=None):
         mode='linear')  # [1, 512, output_len]
     return output_features.transpose(1, 2)  # [1, output_len, 512]
 
-class WanVideoAddAudioEmbeds:
+class WanVideoAddS2VEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "frames": ("INT", {"default": 81, "min": 1, "max": 100000, "step": 1, "tooltip": "Number of frames to process"}),
-                    "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Scale factor for audio embeddings"})
+                    "frame_window_size": ("INT", {"default": 80, "min": 1, "max": 100000, "step": 1, "tooltip": "Number of frames in a single window"}),
+                    "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Scale factor for audio embeddings"}),
+                    "pose_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage for pose embeddings"}),
+                    "pose_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage for pose embeddings"})
                 },
                 "optional": {
                     "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT",),
                     "ref_latent": ("LATENT",),
-                    "pose_latent": ("LATENT",)
+                    "pose_latent": ("LATENT",),
+                    "vae": ("WANVAE",),
+                    "enable_framepack": ("BOOLEAN", {"default": False, "tooltip": "Enable Framepack sampling loop, not compatible with context windows"})
                 }
-
         }
 
-    RETURN_TYPES = ("WANVIDIMAGE_EMBEDS",)
-    RETURN_NAMES = ("image_embeds",)
+    RETURN_TYPES = ("WANVIDIMAGE_EMBEDS", "INT",)
+    RETURN_NAMES = ("image_embeds", "audio_frame_count")
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, frames, audio_encoder_output=None, audio_scale=1.0, ref_latent=None, pose_latent=None):
+    def add(self, embeds, frame_window_size, audio_encoder_output=None, audio_scale=1.0, ref_latent=None, pose_latent=None, vae=None, pose_start_percent=0.0, pose_end_percent=1.0, enable_framepack=False):
         if audio_encoder_output is not None:
             all_layers = audio_encoder_output["encoded_audio_all_layers"]
             audio_feat = torch.stack(all_layers, dim=0).squeeze(1)  # shape: [num_layers, T, 512]
 
-            print("audio_feat", audio_feat.shape)
-            input_fps = 50
-            output_fps = 30
-            bucket_fps = 16
+            print("audio_feat in", audio_feat.shape)
+            input_fps = 50 # determined by the model itself
+            output_fps = 30 # determined by the model itself
+            bucket_fps = 16 # target fps for the generation
 
             if input_fps != output_fps:
                 audio_feat = linear_interpolation(audio_feat, input_fps=input_fps, output_fps=output_fps)
+            print("audio_feat after interpolation", audio_feat.shape)
+
+            audio_feat = audio_feat[:, :embeds["num_frames"] * output_fps // bucket_fps, :]
+            print("audio_feat after trim", audio_feat.shape)
 
             self.video_rate = output_fps
 
             audio_embed_bucket, num_repeat = self.get_audio_embed_bucket_fps(
                 audio_feat,
                 fps=bucket_fps,
-                batch_frames=frames-1
+                batch_frames=frame_window_size
             )
+            print("audio_embed_bucket", audio_embed_bucket.shape)
 
             audio_embed_bucket = audio_embed_bucket.unsqueeze(0)
             if len(audio_embed_bucket.shape) == 3:
                 audio_embed_bucket = audio_embed_bucket.permute(0, 2, 1)
             elif len(audio_embed_bucket.shape) == 4:
                 audio_embed_bucket = audio_embed_bucket.permute(0, 2, 3, 1)
+
+            audio_frame_count = audio_embed_bucket.shape[-1]
 
             print("audio_embed_bucket", audio_embed_bucket.shape)
 
@@ -101,11 +111,16 @@ class WanVideoAddAudioEmbeds:
             "num_repeat": num_repeat if audio_encoder_output is not None else None,
             "ref_latent": ref_latent["samples"] if ref_latent is not None else None,
             "pose_latent": pose_latent["samples"] if pose_latent is not None else None,
-            "audio_scale": audio_scale
+            "audio_scale": audio_scale,
+            "vae": vae,
+            "pose_start_percent": pose_start_percent,
+            "pose_end_percent": pose_end_percent,
+            "enable_framepack": enable_framepack,
+            "frame_window_size": frame_window_size
         }
         updated = dict(embeds)
         updated["audio_embeds"] = new_entry
-        return (updated,)
+        return (updated, audio_frame_count)
     
     def get_audio_embed_bucket_fps(self, audio_embed, fps=16, batch_frames=81, m=0):
         num_layers, audio_frame_num, audio_dim = audio_embed.shape
@@ -120,8 +135,7 @@ class WanVideoAddAudioEmbeds:
         min_batch_num = int(audio_frame_num / (batch_frames * scale)) + 1
 
         bucket_num = min_batch_num * batch_frames
-        padd_audio_num = math.ceil(min_batch_num * batch_frames / fps *
-                                   self.video_rate) - audio_frame_num
+        padd_audio_num = math.ceil(min_batch_num * batch_frames / fps * self.video_rate) - audio_frame_num
         batch_idx = get_sample_indices(
             original_fps=self.video_rate,
             total_frames=audio_frame_num + padd_audio_num,
@@ -161,9 +175,9 @@ class WanVideoAddAudioEmbeds:
 
     
 NODE_CLASS_MAPPINGS = {
-    "WanVideoAddAudioEmbeds": WanVideoAddAudioEmbeds,
+    "WanVideoAddS2VEmbeds": WanVideoAddS2VEmbeds,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "WanVideoAddAudioEmbeds": "WanVideo Add Audio Embeds",
+    "WanVideoAddS2VEmbeds": "WanVideo Add S2V Embeds",
 }
