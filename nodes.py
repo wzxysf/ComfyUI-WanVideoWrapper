@@ -3720,18 +3720,19 @@ class WanVideoSampler:
                                 device=device)
                         videos_last_frames = ref_motion_image
 
-                        pose_cond_list = []
-                        for r in range(s2v_num_repeat):
-                            pose_start = r * (infer_frames // 4)
-                            pose_end = pose_start + (infer_frames // 4)
-                           
-                            cond_lat = s2v_pose[:, :, pose_start:pose_end]
-                           
-                            pad_len = (infer_frames // 4) - cond_lat.shape[2]
-                            if pad_len > 0:
-                                pad = -torch.ones(cond_lat.shape[0], cond_lat.shape[1], pad_len, cond_lat.shape[3], cond_lat.shape[4], device=cond_lat.device, dtype=cond_lat.dtype)
-                                cond_lat = torch.cat([cond_lat, pad], dim=2)
-                            pose_cond_list.append(cond_lat.cpu())
+                        if s2v_pose is not None:
+                            pose_cond_list = []
+                            for r in range(s2v_num_repeat):
+                                pose_start = r * (infer_frames // 4)
+                                pose_end = pose_start + (infer_frames // 4)
+                            
+                                cond_lat = s2v_pose[:, :, pose_start:pose_end]
+                            
+                                pad_len = (infer_frames // 4) - cond_lat.shape[2]
+                                if pad_len > 0:
+                                    pad = -torch.ones(cond_lat.shape[0], cond_lat.shape[1], pad_len, cond_lat.shape[3], cond_lat.shape[4], device=cond_lat.device, dtype=cond_lat.dtype)
+                                    cond_lat = torch.cat([cond_lat, pad], dim=2)
+                                pose_cond_list.append(cond_lat.cpu())
 
                         log.info(f"Sampling {total_frames} frames in {s2v_num_repeat} windows, at {latent.shape[3]*vae_upscale_factor}x{latent.shape[2]*vae_upscale_factor} with {steps} steps")
                         # sample
@@ -3758,6 +3759,7 @@ class WanVideoSampler:
                             else:
                                 input_motion_latents = None
 
+                            s2v_pose_slice = None
                             if s2v_pose is not None:
                                 s2v_pose_slice = pose_cond_list[r].to(device)
 
