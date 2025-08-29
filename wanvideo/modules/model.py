@@ -2137,6 +2137,10 @@ class WanModel(torch.nn.Module):
                 cuda_stream = torch.cuda.Stream(device=device, priority=0)
                 events = [torch.cuda.Event() for _ in self.blocks]
                 swap_start_idx = len(self.blocks) - self.blocks_to_swap if self.blocks_to_swap > 0 else len(self.blocks)
+            else:
+                cuda_stream = None
+                events = None
+                swap_start_idx = len(self.blocks)
 
             for b, block in enumerate(self.blocks):
                 # Prefetch blocks if enabled
@@ -2144,14 +2148,16 @@ class WanModel(torch.nn.Module):
                     for prefetch_offset in range(1, self.prefetch_blocks + 1):
                         prefetch_idx = b + prefetch_offset
                         if prefetch_idx < len(self.blocks) and self.blocks_to_swap > 0 and prefetch_idx >= swap_start_idx:
-                            with torch.cuda.stream(cuda_stream) if torch.cuda.is_available() else nullcontext():
+                            context_mgr = torch.cuda.stream(cuda_stream) if torch.cuda.is_available() else nullcontext()
+                            with context_mgr:
                                 self.blocks[prefetch_idx].to(self.main_device, non_blocking=self.use_non_blocking)
-                                events[prefetch_idx].record(cuda_stream)
+                                if events is not None:
+                                    events[prefetch_idx].record(cuda_stream)
                 if self.block_swap_debug:
                     transfer_start = time.perf_counter()
                 # Wait for block to be ready
                 if b >= swap_start_idx and self.blocks_to_swap > 0:
-                    if self.prefetch_blocks > 0:
+                    if self.prefetch_blocks > 0 and events is not None:
                         if not events[b].query():
                             events[b].synchronize()
                     block.to(self.main_device)
