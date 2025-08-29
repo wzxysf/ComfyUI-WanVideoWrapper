@@ -821,8 +821,9 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             if "patch_embedding" in name:
                 dtype_to_use = torch.float32
 
-        load_device = device
+        load_device = transformer_load_device
         if block_swap_args is not None:
+            load_device = device
             if block_idx is not None:
                 if block_idx >= len(transformer.blocks) - block_swap_args.get("blocks_to_swap", 0):
                     load_device = offload_device
@@ -1336,6 +1337,7 @@ class WanVideoModelLoader:
                     scale_weights.clear()
                     patcher.patches.clear()
                 transformer.patched_linear = False
+                sd = None
             else:
                 from .custom_linear import _replace_linear
                 transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
