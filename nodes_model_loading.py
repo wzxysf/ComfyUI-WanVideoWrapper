@@ -777,7 +777,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             weights = torch.from_numpy(tensor.data.copy()).to(load_device)
             sd[tensor.name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
         sd.update(unianimate_sd)
-        del unianimate_sd
+        del all_tensors, unianimate_sd
 
         if not getattr(transformer, "gguf_patched", False):
             transformer = _replace_with_gguf_linear(
