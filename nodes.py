@@ -36,6 +36,18 @@ offload_device = mm.unet_offload_device()
 VAE_STRIDE = (4, 8, 8)
 PATCH_SIZE = (1, 2, 2)
 
+try:
+    from .gguf.gguf import GGUFParameter
+except:
+    pass
+
+class MetaParameter(torch.nn.Parameter):
+    def __new__(cls, dtype, quant_type=None):
+        data = torch.empty(0, dtype=dtype)
+        self = torch.nn.Parameter(data, requires_grad=False)
+        self.quant_type = quant_type
+        return self
+
 def offload_transformer(transformer):
     for block in transformer.blocks:
         block.kv_cache = None
@@ -55,6 +67,9 @@ def offload_transformer(transformer):
             if param.data.is_floating_point():
                 meta_param = torch.nn.Parameter(torch.empty_like(param.data, device='meta'), requires_grad=False)
                 setattr(module, attr_name, meta_param)
+            elif isinstance(param.data, GGUFParameter):
+                quant_type = getattr(param, 'quant_type', None)
+                setattr(module, attr_name, MetaParameter(param.data.dtype, quant_type))
             else:
                 pass
     else:
