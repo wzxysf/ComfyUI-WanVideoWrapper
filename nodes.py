@@ -3751,11 +3751,11 @@ class WanVideoSampler:
                                 pose_cond_list.append(cond_lat.cpu())
 
                         log.info(f"Sampling {total_frames} frames in {s2v_num_repeat} windows, at {latent.shape[3]*vae_upscale_factor}x{latent.shape[2]*vae_upscale_factor} with {steps} steps")
-
-                        mm.soft_empty_cache()
-                        gc.collect()
                         # sample
                         for r in range(s2v_num_repeat):
+                            vae.model.clear_cache()
+                            mm.soft_empty_cache()
+                            gc.collect()
                             if ref_motion_image is not None:
                                 vae.to(device)
                                 ref_motion = vae.encode(ref_motion_image.to(vae.dtype), device=device, pbar=False).to(dtype)[0]
