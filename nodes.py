@@ -3389,9 +3389,9 @@ class WanVideoSampler:
                                 vae.model.clear_cache()
                                 vae.to(offload_device)
 
-                                motion_frame_index = cur_motion_frames_num if mode == "multitalk" else 1
+                                #motion_frame_index = cur_motion_frames_latent_num if mode == "infinitetalk" else 1
                                 msk = torch.zeros(4, latent_frame_num, lat_h, lat_w, device=device, dtype=dtype)
-                                msk[:, :motion_frame_index] = 1
+                                msk[:, :1] = 1
                                 y = torch.cat([msk, y]) # 4+C T H W
                                 mm.soft_empty_cache()
                             else:
