@@ -2879,6 +2879,7 @@ class WanVideoSampler:
                     noise_pred = noise_pred_uncond_scaled + cfg_scale * filtered_cond * alpha
                 else:
                     noise_pred = noise_pred_uncond_scaled + cfg_scale * (noise_pred_cond - noise_pred_uncond_scaled)
+                del noise_pred_uncond_scaled, noise_pred_cond, noise_pred_uncond
                 
 
                 return noise_pred, [cache_state_cond, cache_state_uncond]
@@ -3750,11 +3751,15 @@ class WanVideoSampler:
                                 pose_cond_list.append(cond_lat.cpu())
 
                         log.info(f"Sampling {total_frames} frames in {s2v_num_repeat} windows, at {latent.shape[3]*vae_upscale_factor}x{latent.shape[2]*vae_upscale_factor} with {steps} steps")
+
+                        mm.soft_empty_cache()
+                        gc.collect()
                         # sample
                         for r in range(s2v_num_repeat):
                             if ref_motion_image is not None:
                                 vae.to(device)
                                 ref_motion = vae.encode(ref_motion_image.to(vae.dtype), device=device, pbar=False).to(dtype)[0]
+                                vae.model.clear_cache()
                                 vae.to(offload_device)
 
                             left_idx = r * infer_frames
@@ -3801,11 +3806,13 @@ class WanVideoSampler:
                                     callback(step_iteration_count, callback_latent, None, s2v_num_repeat*(len(timesteps)))
                                     del callback_latent
                                 step_iteration_count += 1
+                                del latent_model_input, noise_pred
                                 
                             
                             vae.to(device)
                             decode_latents = torch.cat([ref_motion.unsqueeze(0), latent.unsqueeze(0)], dim=2)
                             image = vae.decode(decode_latents.to(device, vae.dtype), device=device, pbar=False)[0]
+                            del decode_latents
                             image = image.unsqueeze(0)[:, :, -infer_frames:]
                             if r == 0:
                                 image = image[:, :, 3:]
@@ -3820,7 +3827,9 @@ class WanVideoSampler:
                           
                             ref_motion_image = videos_last_frames
                             
-                        vae.to(offload_device)  
+                        vae.to(offload_device)
+                        vae.model.clear_cache()
+                        mm.soft_empty_cache()
                         gen_video_samples = torch.cat(framepack_out, dim=2).squeeze(0).permute(1, 2, 3, 0)
 
                         if force_offload:
@@ -3837,16 +3846,14 @@ class WanVideoSampler:
                     else:
                         noise_pred, self.cache_state = predict_with_cfg(
                             latent_model_input, 
-                            cfg[idx], 
-                            text_embeds["prompt_embeds"], 
+                            cfg, text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                             cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens, s2v_audio_input=s2v_audio_input)
                         if bidirectional_sampling:
                             noise_pred_flipped, self.cache_state = predict_with_cfg(
                             latent_model_input_flipped, 
-                            cfg[idx], 
-                            text_embeds["prompt_embeds"], 
+                            cfg, text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                             cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens,reverse_time=True)
