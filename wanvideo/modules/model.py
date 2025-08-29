@@ -5,6 +5,7 @@ import torch.nn as nn
 from einops import repeat, rearrange
 from ...enhance_a_video.enhance import get_feta_scores
 import time
+from contextlib import nullcontext
 try:
     from torch.nn.attention.flex_attention import create_block_mask, flex_attention, BlockMask
     create_block_mask = torch.compile(create_block_mask)
@@ -2132,9 +2133,10 @@ class WanModel(torch.nn.Module):
                     self.controlnet.to(self.offload_device)
 
             # Asynchronous block offloading with CUDA streams and events
-            cuda_stream = torch.cuda.Stream(device=device, priority=0)
-            events = [torch.cuda.Event() for _ in self.blocks]
-            swap_start_idx = len(self.blocks) - self.blocks_to_swap if self.blocks_to_swap > 0 else len(self.blocks)
+            if torch.cuda.is_available():
+                cuda_stream = torch.cuda.Stream(device=device, priority=0)
+                events = [torch.cuda.Event() for _ in self.blocks]
+                swap_start_idx = len(self.blocks) - self.blocks_to_swap if self.blocks_to_swap > 0 else len(self.blocks)
 
             for b, block in enumerate(self.blocks):
                 # Prefetch blocks if enabled
@@ -2142,7 +2144,7 @@ class WanModel(torch.nn.Module):
                     for prefetch_offset in range(1, self.prefetch_blocks + 1):
                         prefetch_idx = b + prefetch_offset
                         if prefetch_idx < len(self.blocks) and self.blocks_to_swap > 0 and prefetch_idx >= swap_start_idx:
-                            with torch.cuda.stream(cuda_stream):
+                            with torch.cuda.stream(cuda_stream) if torch.cuda.is_available() else nullcontext():
                                 self.blocks[prefetch_idx].to(self.main_device, non_blocking=self.use_non_blocking)
                                 events[prefetch_idx].record(cuda_stream)
                 if self.block_swap_debug:
