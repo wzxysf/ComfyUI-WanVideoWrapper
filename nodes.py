@@ -3846,14 +3846,14 @@ class WanVideoSampler:
                     else:
                         noise_pred, self.cache_state = predict_with_cfg(
                             latent_model_input, 
-                            cfg, text_embeds["prompt_embeds"], 
+                            cfg[idx], text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                             cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens, s2v_audio_input=s2v_audio_input)
                         if bidirectional_sampling:
                             noise_pred_flipped, self.cache_state = predict_with_cfg(
                             latent_model_input_flipped, 
-                            cfg, text_embeds["prompt_embeds"], 
+                            cfg[idx], text_embeds["prompt_embeds"], 
                             text_embeds["negative_prompt_embeds"], 
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                             cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens,reverse_time=True)
