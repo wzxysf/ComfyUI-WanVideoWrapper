@@ -2516,7 +2516,7 @@ class WanModel(torch.nn.Module):
                     self.controlnet.to(self.offload_device)
 
             # Asynchronous block offloading with CUDA streams and events
-            cuda_stream = mm.get_offload_stream(device)
+            cuda_stream = torch.cuda.Stream(device=device, priority=0)
             events = [torch.cuda.Event() for _ in self.blocks]
             swap_start_idx = len(self.blocks) - self.blocks_to_swap if self.blocks_to_swap > 0 else len(self.blocks)
 
