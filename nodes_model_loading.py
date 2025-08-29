@@ -824,6 +824,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
 
         load_device = transformer_load_device
         if block_swap_args is not None:
+            load_device = device
             if block_idx is not None:
                 if block_idx >= len(transformer.blocks) - block_swap_args.get("blocks_to_swap", 0):
                     load_device = offload_device
