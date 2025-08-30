@@ -626,7 +626,7 @@ class WanT2VCrossAttention(WanSelfAttention):
     def forward(self, x, context, grid_sizes=None, clip_embed=None, audio_proj=None, audio_scale=1.0, 
                 num_latent_frames=21, nag_params={}, nag_context=None, is_uncond=False, rope_func="comfy", 
                 inner_t=None, inner_c=None, cross_freqs=None,
-                adapter_proj=None, adapter_attn_mask=None, ip_scale=1.0, **kwargs):
+                adapter_proj=None, adapter_attn_mask=None, ip_scale=1.0, orig_seq_len=None, **kwargs):
         b, n, d = x.size(0), self.num_heads, self.head_dim
         # compute query
         q = self.norm_q(self.q(x),num_chunks=2 if rope_func == "comfy_chunked" else 1).view(b, -1, n, d)
@@ -664,19 +664,20 @@ class WanT2VCrossAttention(WanSelfAttention):
         # FantasyPortrait adapter attention
         if adapter_proj is not None:
             if len(adapter_proj.shape) == 4:
-                adapter_q = q.view(b * num_latent_frames, -1, n, d)
+                q_in = q[:, :orig_seq_len]                
+                adapter_q = q_in.view(b * num_latent_frames, -1, n, d)
                 ip_key = self.ip_adapter_single_stream_k_proj(adapter_proj).view(b * num_latent_frames, -1, n, d)
                 ip_value = self.ip_adapter_single_stream_v_proj(adapter_proj).view(b * num_latent_frames, -1, n, d)
 
                 adapter_x = attention(adapter_q, ip_key, ip_value, attention_mode=self.attention_mode)
-                adapter_x = adapter_x.view(b, q.size(1), n, d)
+                adapter_x = adapter_x.view(b, q_in.size(1), n, d)
                 adapter_x = adapter_x.flatten(2)
             elif len(adapter_proj.shape) == 3:
                 ip_key = self.ip_adapter_single_stream_k_proj(adapter_proj).view(b, -1, n, d)
                 ip_value = self.ip_adapter_single_stream_v_proj(adapter_proj).view(b, -1, n, d)
-                adapter_x = attention(q, ip_key, ip_value, attention_mode=self.attention_mode)
+                adapter_x = attention(q_in, ip_key, ip_value, attention_mode=self.attention_mode)
                 adapter_x = adapter_x.flatten(2)
-            x = x + adapter_x * ip_scale
+            x[:, :orig_seq_len] = x[:, :orig_seq_len] + adapter_x * ip_scale
 
         return self.o(x)
 
@@ -692,7 +693,7 @@ class WanI2VCrossAttention(WanSelfAttention):
 
     def forward(self, x, context, grid_sizes=None, clip_embed=None, audio_proj=None, 
                 audio_scale=1.0, num_latent_frames=21, nag_params={}, nag_context=None, is_uncond=False, rope_func="comfy", 
-                adapter_proj=None, adapter_attn_mask=None, ip_scale=1.0, **kwargs):
+                adapter_proj=None, adapter_attn_mask=None, ip_scale=1.0, orig_seq_len=None, **kwargs):
         r"""
         Args:
             x(Tensor): Shape [B, L1, C]
@@ -906,6 +907,7 @@ class WanAttentionBlock(nn.Module):
         audio_proj=None,
         audio_scale=1.0,
         num_latent_frames=21,
+        original_seq_len=None,
         enhance_enabled=False,
         block_mask=None,
         nag_params={},
@@ -936,6 +938,7 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        self.original_seq_len = original_seq_len
         self.zero_timestep = len(e) == 2
         if self.zero_timestep: #s2v zero timestep
             self.seg_idx = e[1]
@@ -1107,7 +1110,7 @@ class WanAttentionBlock(nn.Module):
                                     audio_proj=audio_proj, audio_scale=audio_scale,
                                     num_latent_frames=num_latent_frames, nag_params=nag_params, nag_context=nag_context, is_uncond=is_uncond,
                                     rope_func=self.rope_func, inner_t=inner_t, inner_c=inner_c, cross_freqs=cross_freqs,
-                                    adapter_proj=adapter_proj, ip_scale=ip_scale)
+                                    adapter_proj=adapter_proj, ip_scale=ip_scale, orig_seq_len=self.original_seq_len)
             # MultiTalk
             if multitalk_audio_embedding is not None and not isinstance(self, VaceWanAttentionBlock):
                 x_audio = self.audio_cross_attn(self.norm_x(x), encoder_hidden_states=multitalk_audio_embedding,
@@ -2458,6 +2461,7 @@ class WanModel(torch.nn.Module):
                 camera_embed=camera_embed,
                 audio_proj=audio_proj,
                 num_latent_frames = F,
+                original_seq_len=self.original_seq_len,
                 enhance_enabled=enhance_enabled,
                 audio_scale=audio_scale,
                 block_mask=self.block_mask,

@@ -71,6 +71,7 @@ class WanVideoAddS2VEmbeds:
     CATEGORY = "WanVideoWrapper"
 
     def add(self, embeds, frame_window_size, audio_encoder_output=None, audio_scale=1.0, ref_latent=None, pose_latent=None, vae=None, pose_start_percent=0.0, pose_end_percent=1.0, enable_framepack=False):
+        audio_frame_count=0
         if audio_encoder_output is not None:
             all_layers = audio_encoder_output["encoded_audio_all_layers"]
             audio_feat = torch.stack(all_layers, dim=0).squeeze(1)  # shape: [num_layers, T, 512]
