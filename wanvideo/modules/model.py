@@ -2160,8 +2160,7 @@ class WanModel(torch.nn.Module):
                     if self.prefetch_blocks > 0 and events is not None:
                         if not events[b].query():
                             events[b].synchronize()
-                    else:
-                        block.to(self.main_device)
+                    block.to(self.main_device)
                 if self.block_swap_debug:
                     transfer_end = time.perf_counter()
                     transfer_time = transfer_end - transfer_start
