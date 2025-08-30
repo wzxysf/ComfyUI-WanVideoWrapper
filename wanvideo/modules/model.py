@@ -2134,7 +2134,7 @@ class WanModel(torch.nn.Module):
 
             # Asynchronous block offloading with CUDA streams and events
             if torch.cuda.is_available():
-                cuda_stream = torch.cuda.Stream(device=device, priority=0)
+                cuda_stream = None #torch.cuda.Stream(device=device, priority=0) # todo causes issues on some systems
                 events = [torch.cuda.Event() for _ in self.blocks]
                 swap_start_idx = len(self.blocks) - self.blocks_to_swap if self.blocks_to_swap > 0 else len(self.blocks)
             else:
@@ -2160,7 +2160,8 @@ class WanModel(torch.nn.Module):
                     if self.prefetch_blocks > 0 and events is not None:
                         if not events[b].query():
                             events[b].synchronize()
-                    block.to(self.main_device)
+                    else:
+                        block.to(self.main_device)
                 if self.block_swap_debug:
                     transfer_end = time.perf_counter()
                     transfer_time = transfer_end - transfer_start
