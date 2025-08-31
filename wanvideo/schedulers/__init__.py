@@ -137,7 +137,8 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
     
     if log_timesteps:
         log.info(f"Using timesteps: {timesteps}")
-    
+        log.info(f"Using sigmas: {sample_scheduler.sigmas}")
+
     if hasattr(sample_scheduler, 'timesteps'):
         sample_scheduler.timesteps = timesteps
 
