@@ -743,11 +743,11 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
 
         # Prepare sd from GGUF readers
 
-        # UniAnimate embedding weight workaround
-        unianimate_sd = {}
-        for key in sd.keys():
-            if "dwpose_embedding" in key or "randomref_embedding_pose" in key:
-                unianimate_sd[key] = sd[key]
+        # handle possible non-GGUF weights
+        extra_sd = {}
+        for key, value in sd.items():
+            if value.device != torch.device("meta"):
+                extra_sd[key] = value
 
         sd = {}
         all_tensors = []
@@ -777,8 +777,8 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             is_gguf_quant = tensor.tensor_type not in [GGMLQuantizationType.F32, GGMLQuantizationType.F16]
             weights = torch.from_numpy(tensor.data.copy()).to(load_device)
             sd[tensor.name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
-        sd.update(unianimate_sd)
-        del all_tensors, unianimate_sd
+        sd.update(extra_sd)
+        del all_tensors, extra_sd
 
         if not getattr(transformer, "gguf_patched", False):
             transformer = _replace_with_gguf_linear(
