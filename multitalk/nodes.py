@@ -261,6 +261,14 @@ class MultiTalkWav2VecEmbeds:
                     offset += length
                 multitalk_audio_features = full_list
 
+        # if audio_encoder_output is not None:
+        #     all_layers = audio_encoder_output["encoded_audio_all_layers"]
+        #     audio_feat = torch.stack(all_layers, dim=0).squeeze(1)[1:]  # shape: [num_layers, T, 512]
+        #     audio_feat = audio_feat.movedim(0, 1)
+        #     print("audio_feat mean", audio_feat.mean())
+        #     print("audio_feat min max", audio_feat.min(), audio_feat.max())
+        #     multitalk_audio_features.append(audio_feat.cpu().detach())
+
         # fallback
         if len(multitalk_audio_features) == 0:
             raise RuntimeError("No valid audio embeddings extracted, please check inputs")
