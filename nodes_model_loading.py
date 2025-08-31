@@ -1244,7 +1244,9 @@ class WanVideoModelLoader:
             multitalk_model_path = multitalk_model["model_path"]
             if multitalk_model_path.endswith(".gguf") and not gguf:
                 raise ValueError("Multitalk/InfiniteTalk model is a GGUF model, main model also has to be a GGUF model.")
-            
+            if "scaled" in multitalk_model and gguf:
+                raise ValueError("fp8 scaled Multitalk/InfiniteTalk model can't be used with GGUF main model")
+
             # init audio module
             from .multitalk.multitalk import SingleStreamMultiAttention
             from .wanvideo.modules.model import WanLayerNorm
@@ -1265,7 +1267,7 @@ class WanVideoModelLoader:
             transformer.multitalk_model_type = multitalk_model_type
 
             extra_model_path = multitalk_model["model_path"]
-            if gguf:
+            if multitalk_model_path.endswith(".gguf"):
                 extra_sd, extra_reader = load_gguf(extra_model_path)
                 gguf_reader.append(extra_reader)
                 del extra_reader
