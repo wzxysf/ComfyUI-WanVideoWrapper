@@ -6,13 +6,7 @@ from einops import repeat, rearrange
 from ...enhance_a_video.enhance import get_feta_scores
 import time
 from contextlib import nullcontext
-try:
-    from torch.nn.attention.flex_attention import create_block_mask, flex_attention, BlockMask
-    create_block_mask = torch.compile(create_block_mask)
-    flex_attention = torch.compile(flex_attention)
-except:
-    BlockMask = create_block_mask = flex_attention = None
-    pass
+
 try:
     from ..radial_attention.attn_mask import RadialSpargeSageAttn, RadialSpargeSageAttnDense, MaskMap
 except:
@@ -434,34 +428,7 @@ class WanSelfAttention(nn.Module):
         x = torch.cat([main_out, cond_out], dim=1)
 
         return self.o(x.flatten(2))
-    
-    
-    def forward_flex(self, q, k, v, block_mask=None):
-        padded_length = math.ceil(q.shape[1] / 128) * 128 - q.shape[1]
-        padded_roped_query = torch.cat(
-            [q, torch.zeros([q.shape[0], padded_length, q.shape[2], q.shape[3]],
-                            device=q.device, dtype=v.dtype)], dim=1
-            )
-
-        padded_roped_key = torch.cat(
-            [k, torch.zeros([k.shape[0], padded_length, k.shape[2], k.shape[3]],
-                                    device=k.device, dtype=v.dtype)], dim=1
-            )
-
-        padded_v = torch.cat(
-            [v, torch.zeros([v.shape[0], padded_length, v.shape[2], v.shape[3]],
-                            device=v.device, dtype=v.dtype)],  dim=1
-            )
-
-        x = flex_attention(
-            query=padded_roped_query.transpose(2, 1),
-            key=padded_roped_key.transpose(2, 1),
-            value=padded_v.transpose(2, 1),
-            block_mask=block_mask
-        )[:, :, :-padded_length].transpose(2, 1)
-
-        return self.o(x.flatten(2))
-    
+   
     
     def forward_radial(self, q, k, v, dense_step=False):
         if dense_step:
@@ -1031,8 +998,6 @@ class WanAttentionBlock(nn.Module):
                     y = self.self_attn.forward(q, k, v, seq_lens)
             else:
                 y = self.self_attn.forward_radial(q, k, v, dense_step=False)
-        elif self.attention_mode == "flex_attention":
-            y = self.self_attn.forward_flex(q, k, v, block_mask=block_mask)
         elif self.attention_mode == "sageattn_3":
             if current_step != 0 and not last_step:
                 y = self.self_attn.forward(q, k, v, seq_lens, attention_mode_override="sageattn_3")
@@ -1690,49 +1655,6 @@ class WanModel(torch.nn.Module):
         self.adain_mode = adain_mode
         self.zero_timestep = zero_timestep
 
-            
-
-    @staticmethod
-    def _prepare_blockwise_causal_attn_mask(
-        device: torch.device | str, num_frames: int = 21,
-        frame_seqlen: int = 1560, num_frame_per_block=1
-    ):
-        """
-        we will divide the token sequence into the following format
-        [1 latent frame] [1 latent frame] ... [1 latent frame]
-        We use flexattention to construct the attention mask
-        """
-        print("num_frames", num_frames)
-        print("frame_seqlen", frame_seqlen)
-        total_length = num_frames * frame_seqlen
-
-        # we do right padding to get to a multiple of 128
-        padded_length = math.ceil(total_length / 128) * 128 - total_length
-
-        ends = torch.zeros(total_length + padded_length,
-                           device=device, dtype=torch.long)
-
-        # Block-wise causal mask will attend to all elements that are before the end of the current chunk
-        frame_indices = torch.arange(
-            start=0,
-            end=total_length,
-            step=frame_seqlen * num_frame_per_block,
-            device=device
-        )
-
-        for tmp in frame_indices:
-            ends[tmp:tmp + frame_seqlen * num_frame_per_block] = tmp + \
-                frame_seqlen * num_frame_per_block
-
-        def attention_mask(b, h, q_idx, kv_idx):
-            return (kv_idx < ends[q_idx]) | (q_idx == kv_idx)
-            # return ((kv_idx < total_length) & (q_idx < total_length))  | (q_idx == kv_idx) # bidirectional mask
-
-        
-        block_mask = create_block_mask(attention_mask, B=None, H=None, Q_LEN=total_length + padded_length,
-                                       KV_LEN=total_length + padded_length, _compile=False, device=device)
-
-        return block_mask
 
     def block_swap(self, blocks_to_swap, offload_txt_emb=False, offload_img_emb=False, vace_blocks_to_swap=None, prefetch_blocks=0, block_swap_debug=False):
         # Clamp blocks_to_swap to valid range
@@ -2030,14 +1952,6 @@ class WanModel(torch.nn.Module):
            freqs = freqs.to(device)
 
         _, F, H, W = x[0].shape
- 
-        # Construct blockwise causal attn mask
-        if self.attention_mode == 'flex_attention' and current_step == 0:
-            self.block_mask = self._prepare_blockwise_causal_attn_mask(
-                device, num_frames=F,
-                frame_seqlen=H * W // (self.patch_size[1] * self.patch_size[2]),
-                num_frame_per_block=3
-            )
             
         if y is not None:
             if hasattr(self, "randomref_embedding_pose") and unianim_data is not None:

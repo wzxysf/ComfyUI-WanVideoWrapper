@@ -939,7 +939,6 @@ class WanVideoModelLoader:
                     "flash_attn_3",
                     "sageattn",
                     "sageattn_3",
-                    "flex_attention",
                     "radial_sage_attention",
                     ], {"default": "sdpa"}),
                 "compile_args": ("WANCOMPILEARGS", ),
