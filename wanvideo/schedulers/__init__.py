@@ -100,7 +100,7 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
         timesteps = sample_scheduler.timesteps
 
     steps = len(timesteps)
-    if end_step != -1 and start_step >= end_step:
+    if (isinstance(start_step, int) and end_step != -1 and start_step >= end_step) or (not isinstance(start_step, int) and start_step != -1 and end_step >= start_step):
         raise ValueError("start_step must be less than end_step")
     if denoise_strength < 1.0:
         if start_step != 0:
