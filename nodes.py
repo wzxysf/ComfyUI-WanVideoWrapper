@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 import inspect
+import copy
 import hashlib
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
@@ -850,7 +851,8 @@ class WanVideoAddMTVMotion:
         updated = dict(embeds)
         updated["mtv_crafter_motion"] = new_entry
         return (updated,)
-    
+
+#region I2V encode
 class WanVideoImageToVideoEncode:
     @classmethod
     def INPUT_TYPES(s):
@@ -1837,7 +1839,7 @@ class WanVideoSampler:
         #region Scheduler
         sample_scheduler = None
         if isinstance(scheduler, dict):
-            sample_scheduler = scheduler["sample_scheduler"]
+            sample_scheduler = copy.deepcopy(scheduler["sample_scheduler"])
             timesteps = scheduler["timesteps"]
         elif scheduler != "multitalk":
             sample_scheduler, timesteps,_,_ = get_scheduler(scheduler, steps, start_step, end_step, shift, device, transformer.dim, flowedit_args, denoise_strength, sigmas=sigmas, log_timesteps=True)
@@ -1847,6 +1849,8 @@ class WanVideoSampler:
 
         total_steps = steps
         steps = len(timesteps)
+
+        is_pusa = "pusa" in sample_scheduler.__class__.__name__.lower()
 
         if end_step != -1 and start_step >= end_step:
             raise ValueError("start_step must be less than end_step")
@@ -1883,10 +1887,11 @@ class WanVideoSampler:
         #I2V
         image_cond = image_embeds.get("image_embeds", None)
         if image_cond is not None:
-            if transformer.in_dim == 16:
+            if is_pusa:
+                image_cond_mask = image_embeds.get("mask", None)
+            elif transformer.in_dim == 16:
                 raise ValueError("T2V (text to video) model detected, encoded images only work with I2V (Image to video) models")
-            
-            if transformer.in_dim not in [48, 32]: # fun 2.1 models don't use the mask
+            elif transformer.in_dim not in [48, 32]: # fun 2.1 models don't use the mask
                 image_cond_mask = image_embeds.get("mask", None)
                 if image_cond_mask is not None:
                     image_cond = torch.cat([image_cond_mask, image_cond])
@@ -2309,7 +2314,19 @@ class WanVideoSampler:
         
         # extra latents (Pusa) and 5b
         latents_to_insert = add_index = None
-        if (extra_latents := image_embeds.get("extra_latents", None)) is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
+        extra_latents = image_embeds.get("extra_latents", None)
+        if extra_latents is None:
+            if image_cond is not None and is_pusa: # get images for pusa if I2V node is used
+                extra_latents = image_cond
+                # Find indices where mask is 1
+                all_indices = torch.where(image_cond_mask[:, :, 0, 0].any(dim=0))[0].tolist()
+                num_extra_frames = len(all_indices)
+                if start_step == 0:
+                    for idx in all_indices:
+                        noise[:, idx] = extra_latents[:, idx].to(noise)
+                        log.info(f"Adding extra sample to latent index {idx}")
+                image_cond = None
+        elif extra_latents is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
             all_indices = []
             for entry in extra_latents:
                 add_index = entry["index"]
@@ -2322,7 +2339,6 @@ class WanVideoSampler:
                     noise[:, add_index:add_index+num_extra_frames] = entry["samples"].to(noise)
                     log.info(f"Adding extra samples to latent indices {add_index} to {add_index+num_extra_frames-1}")
                 all_indices.extend(range(add_index, add_index+num_extra_frames))
-
 
         latent = noise.to(device)
 
@@ -2515,7 +2531,6 @@ class WanVideoSampler:
 
             bidirectional_sampling = experimental_args.get("bidirectional_sampling", False)
             if bidirectional_sampling:
-                import copy
                 sample_scheduler_flipped = copy.deepcopy(sample_scheduler)
 
         # Rotary positional embeddings (RoPE)
@@ -3007,7 +3022,7 @@ class WanVideoSampler:
                     current_step_percentage = idx / len(timesteps)
 
                     timestep = torch.tensor([t]).to(device)
-                    if "pusa" in sample_scheduler.__class__.__name__.lower() or (is_5b and 'all_indices' in locals()):
+                    if is_pusa or (is_5b and 'all_indices' in locals()):
                         orig_timestep = timestep
                         timestep = timestep.unsqueeze(1).repeat(1, latent_video_length)
                         if extra_latents is not None:
@@ -3878,7 +3893,7 @@ class WanVideoSampler:
                     if flowedit_args is None:
                         latent = latent.to(intermediate_device)
                         
-                        if len(timestep.shape) != 1 and not "pusa" in sample_scheduler.__class__.__name__.lower(): #5b
+                        if len(timestep.shape) != 1 and not is_pusa: #5b
                             # all_indices is a list of indices to skip
                             total_indices = list(range(latent.shape[1]))
                             process_indices = [i for i in total_indices if i not in all_indices]
