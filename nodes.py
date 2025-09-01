@@ -1647,7 +1647,7 @@ class WanVideoScheduler: #WIP
             try:
                 # Plot sigmas and save to a buffer
                 sigmas_np = sample_scheduler.full_sigmas.cpu().numpy()
-                if sample_scheduler.full_sigmas[:-1] == 0:
+                if sample_scheduler.full_sigmas[-1].item() == 0:
                     sigmas_np = sigmas_np[:-1]
                 buf = io.BytesIO()
                 fig = plt.figure(facecolor='#353535')
