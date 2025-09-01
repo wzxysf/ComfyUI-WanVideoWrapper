@@ -2314,6 +2314,10 @@ class WanVideoSampler:
             for entry in extra_latents:
                 add_index = entry["index"]
                 num_extra_frames = entry["samples"].shape[2]
+                # Handle negative indices
+                if add_index < 0:
+                    add_index = noise.shape[1] + add_index
+                add_index = max(0, min(add_index, noise.shape[1] - num_extra_frames))
                 if start_step == 0:
                     noise[:, add_index:add_index+num_extra_frames] = entry["samples"].to(noise)
                     log.info(f"Adding extra samples to latent indices {add_index} to {add_index+num_extra_frames-1}")
