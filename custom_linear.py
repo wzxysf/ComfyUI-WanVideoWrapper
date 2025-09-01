@@ -82,11 +82,10 @@ class CustomLinear(nn.Linear):
         weight, bias = cast_bias_weight(self, input)
 
         if self.scale_weight is not None:
-            scale_weight = self.scale_weight.to(input.device)
             if weight.numel() < input.numel():
-                weight = weight * scale_weight
+                weight = weight * self.scale_weight
             else:
-                input = input * scale_weight
+                input = input * self.scale_weight
 
         if self.lora is not None:
             weight = self.apply_lora(weight).to(self.compute_dtype)
@@ -108,7 +107,7 @@ class CustomLinear(nn.Linear):
             ).reshape(weight.shape)
             alpha = lora_diff[2] / lora_diff[1].shape[0] if lora_diff[2] is not None else 1.0
             scale = lora_strength * alpha
-            weight = weight.add(patch_diff, alpha=scale)
+            weight.add_(patch_diff, alpha=scale)
         return weight
     
 def remove_lora_from_module(module):

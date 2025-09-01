@@ -1305,7 +1305,7 @@ class WanVideoModelLoader:
         if "fp8" in quantization:
             for k, v in sd.items():
                 if k.endswith(".scale_weight"):
-                    scale_weights[k] = v.to(base_dtype)
+                    scale_weights[k] = v.to(device, base_dtype)
         
         if "fp8_e4m3fn" in quantization:
             weight_dtype = torch.float8_e4m3fn
