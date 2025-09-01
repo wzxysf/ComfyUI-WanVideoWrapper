@@ -89,10 +89,10 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
         sample_scheduler.timesteps = denoising_step_list[:steps].clone().detach().to(device)
         sample_scheduler.sigmas = torch.cat([sample_scheduler.timesteps / 1000, torch.tensor([0.0], device=device)])
     elif 'flowmatch_pusa' in scheduler:
-        sample_scheduler = FlowMatchSchedulerPusa(
-            shift=shift, sigma_min=0.0, extra_one_step=True
-        )
-        sample_scheduler.set_timesteps(steps, denoising_strength=denoise_strength, shift=shift, sigmas=sigmas[:-1].tolist() if sigmas is not None else None)
+        sample_scheduler = FlowMatchSchedulerPusa(shift=shift, sigma_min=0.0, extra_one_step=True)
+        sample_scheduler.set_timesteps(steps, denoising_strength=denoise_strength, shift=shift, 
+                                       sigmas=sigmas[:-1].tolist() if sigmas is not None else None,
+                                       finalize=(end_step == -1 or end_step >= steps))
     elif scheduler == 'res_multistep':
         sample_scheduler = FlowMatchSchedulerResMultistep(shift=shift)
         sample_scheduler.set_timesteps(steps, denoising_strength=denoise_strength, sigmas=sigmas[:-1].tolist() if sigmas is not None else None)

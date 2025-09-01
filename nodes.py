@@ -1845,7 +1845,6 @@ class WanVideoSampler:
         else:
             timesteps = torch.tensor([1000, 750, 500, 250], device=device)
 
-        log.info(f"timesteps: {timesteps}")
         total_steps = steps
         steps = len(timesteps)
 
@@ -2315,8 +2314,9 @@ class WanVideoSampler:
             for entry in extra_latents:
                 add_index = entry["index"]
                 num_extra_frames = entry["samples"].shape[2]
-                noise[:, add_index:add_index+num_extra_frames] = entry["samples"].to(noise)
-                log.info(f"Adding extra samples to latent indices {add_index} to {add_index+num_extra_frames-1}")
+                if start_step == 0:
+                    noise[:, add_index:add_index+num_extra_frames] = entry["samples"].to(noise)
+                    log.info(f"Adding extra samples to latent indices {add_index} to {add_index+num_extra_frames-1}")
                 all_indices.extend(range(add_index, add_index+num_extra_frames))
 
 
