@@ -1628,7 +1628,8 @@ class WanVideoScheduler: #WIP
             steps, 
             start_step, end_step, shift, 
             device, 
-            sigmas=sigmas)
+            sigmas=sigmas,
+            log_timesteps=True)
         
         scheduler_dict = {
             "sample_scheduler": sample_scheduler,
@@ -1645,12 +1646,17 @@ class WanVideoScheduler: #WIP
         if unique_id and PromptServer is not None:
             try:
                 # Plot sigmas and save to a buffer
-                sigmas_np = sample_scheduler.full_sigmas[:-1].cpu().numpy()
+                sigmas_np = sample_scheduler.full_sigmas.cpu().numpy()
+                if sample_scheduler.full_sigmas[:-1] == 0:
+                    sigmas_np = sigmas_np[:-1]
                 buf = io.BytesIO()
                 fig = plt.figure(facecolor='#353535')
                 ax = fig.add_subplot(111)
                 ax.set_facecolor('#353535')  # Set axes background color
-                ax.plot(sigmas_np)
+                # Create x-axis values starting from 1 instead of 0
+                x_values = range(1, len(sigmas_np) + 1)
+                ax.plot(x_values, sigmas_np)
+                ax.set_xticks(x_values)
                 ax.set_title("Sigmas", color='white')           # Title font color
                 ax.set_xlabel("Step", color='white')            # X label font color
                 ax.set_ylabel("Sigma Value", color='white')     # Y label font color
@@ -1658,10 +1664,10 @@ class WanVideoScheduler: #WIP
                 ax.tick_params(axis='y', colors='white')        # Y tick color
                 # Add split point if end_step is defined
                 if end_idx != -1 and 0 <= end_idx < len(sigmas_np):
-                    ax.axvline(end_idx, color='red', linestyle='--', linewidth=2, label='end_step split')
+                    ax.axvline(end_idx + 1, color='red', linestyle='--', linewidth=2, label='end_step split')
                 # Add split point if start_step is defined
                 if start_idx > 0 and 0 <= start_idx < len(sigmas_np):
-                    ax.axvline(start_idx, color='green', linestyle='--', linewidth=2, label='start_step split')
+                    ax.axvline(start_idx + 1, color='green', linestyle='--', linewidth=2, label='start_step split')
                 if (end_idx != -1 and 0 <= end_idx < len(sigmas_np)) or (start_idx > 0 and 0 <= start_idx < len(sigmas_np)):
                     ax.legend()
                 plt.tight_layout()
@@ -2997,7 +3003,7 @@ class WanVideoSampler:
                     current_step_percentage = idx / len(timesteps)
 
                     timestep = torch.tensor([t]).to(device)
-                    if scheduler == "flowmatch_pusa" or (is_5b and 'all_indices' in locals()):
+                    if "pusa" in sample_scheduler.__class__.__name__.lower() or (is_5b and 'all_indices' in locals()):
                         orig_timestep = timestep
                         timestep = timestep.unsqueeze(1).repeat(1, latent_video_length)
                         if extra_latents is not None:
@@ -3868,7 +3874,7 @@ class WanVideoSampler:
                     if flowedit_args is None:
                         latent = latent.to(intermediate_device)
                         
-                        if len(timestep.shape) != 1 and scheduler != "flowmatch_pusa": #5b
+                        if len(timestep.shape) != 1 and not "pusa" in sample_scheduler.__class__.__name__.lower(): #5b
                             # all_indices is a list of indices to skip
                             total_indices = list(range(latent.shape[1]))
                             process_indices = [i for i in total_indices if i not in all_indices]
