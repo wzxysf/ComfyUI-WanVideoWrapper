@@ -1789,8 +1789,8 @@ class WanModel(torch.nn.Module):
             x[:, :self.original_seq_len].add_(residual_out)
 
         return x
-    
-    def rope_encode_comfy(self, t, h, w, freq_offset=0, t_start=0, attn_cond=None, steps_t=None, steps_h=None, steps_w=None, ntk_alphas=[1,1,1], device=None, dtype=None):
+
+    def rope_encode_comfy(self, t, h, w, freq_offset=0, t_start=0, attn_cond_shape=None, steps_t=None, steps_h=None, steps_w=None, ntk_alphas=[1,1,1], device=None, dtype=None):
         patch_size = self.patch_size
         t_len = ((t + (patch_size[0] // 2)) // patch_size[0])
         h_len = ((h + (patch_size[1] // 2)) // patch_size[1])
@@ -1808,8 +1808,8 @@ class WanModel(torch.nn.Module):
         img_ids[:, :, :, 1] = img_ids[:, :, :, 1] + torch.linspace(freq_offset, h_len - 1, steps=steps_h, device=device, dtype=dtype).reshape(1, -1, 1)
         img_ids[:, :, :, 2] = img_ids[:, :, :, 2] + torch.linspace(freq_offset, w_len - 1, steps=steps_w, device=device, dtype=dtype).reshape(1, 1, -1)
         img_ids = img_ids.reshape(1, -1, img_ids.shape[-1])
-        if attn_cond is not None:
-            F_cond, H_cond, W_cond = attn_cond.shape[2], attn_cond.shape[3], attn_cond.shape[4]
+        if attn_cond_shape is not None:
+            F_cond, H_cond, W_cond = attn_cond_shape[2], attn_cond_shape[3], attn_cond_shape[4]
             cond_f_len = ((F_cond + (self.patch_size[0] // 2)) // self.patch_size[0])
             cond_h_len = ((H_cond + (self.patch_size[1] // 2)) // self.patch_size[1])
             cond_w_len = ((W_cond + (self.patch_size[2] // 2)) // self.patch_size[2])
@@ -1819,15 +1819,16 @@ class WanModel(torch.nn.Module):
             shift_f_size = 81 # Default value
             shift_f = False
             if shift_f:
-                cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(shift_f_size, shift_f_size + cond_f_len - 1,steps=cond_f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
+                cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(shift_f_size, shift_f_size + cond_f_len - 1,steps=cond_f_len, device=device, dtype=dtype).reshape(-1, 1, 1)
             else:
-                cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(0, cond_f_len - 1, steps=cond_f_len, device=x.device, dtype=x.dtype).reshape(-1, 1, 1)
-            cond_img_ids[:, :, :, 1] = cond_img_ids[:, :, :, 1] + torch.linspace(h_len, h_len + cond_h_len - 1, steps=cond_h_len, device=x.device, dtype=x.dtype).reshape(1, -1, 1)
-            cond_img_ids[:, :, :, 2] = cond_img_ids[:, :, :, 2] + torch.linspace(w_len, w_len + cond_w_len - 1, steps=cond_w_len, device=x.device, dtype=x.dtype).reshape(1, 1, -1)
-        
+                cond_img_ids[:, :, :, 0] = cond_img_ids[:, :, :, 0] + torch.linspace(0, cond_f_len - 1, steps=cond_f_len, device=device, dtype=dtype).reshape(-1, 1, 1)
+            cond_img_ids[:, :, :, 1] = cond_img_ids[:, :, :, 1] + torch.linspace(h_len, h_len + cond_h_len - 1, steps=cond_h_len, device=device, dtype=dtype).reshape(1, -1, 1)
+            cond_img_ids[:, :, :, 2] = cond_img_ids[:, :, :, 2] + torch.linspace(w_len, w_len + cond_w_len - 1, steps=cond_w_len, device=device, dtype=dtype).reshape(1, 1, -1)
+
             # Combine original and conditional position ids
-            img_ids = repeat(img_ids, "t h w c -> b (t h w) c", b=1)
-            cond_img_ids = repeat(cond_img_ids, "t h w c -> b (t h w) c", b=1)
+            #img_ids = repeat(img_ids, "t h w c -> b (t h w) c", b=1)
+            #cond_img_ids = repeat(cond_img_ids, "t h w c -> b (t h w) c", b=1)
+            cond_img_ids = cond_img_ids.reshape(1, -1, cond_img_ids.shape[-1])
             combined_img_ids = torch.cat([img_ids, cond_img_ids], dim=1)
             
             # Generate RoPE frequencies for the combined positions
@@ -2004,7 +2005,9 @@ class WanModel(torch.nn.Module):
             add_cond = self.add_conv_in(add_cond.to(self.add_conv_in.weight.dtype)).to(x[0].dtype)
             add_cond = add_cond.flatten(2).transpose(1, 2)
             x[0] = x[0] + self.add_proj(add_cond)
+        attn_cond_shape = None
         if attn_cond is not None:
+            attn_cond_shape = attn_cond.shape
             grid_sizes = torch.stack([torch.tensor([u[0] + 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
             attn_cond = self.attn_conv_in(attn_cond.to(self.attn_conv_in.weight.dtype)).to(x[0].dtype)
             attn_cond = attn_cond.flatten(2).transpose(1, 2)
@@ -2073,7 +2076,7 @@ class WanModel(torch.nn.Module):
                 ):
                 freqs = self.cached_freqs
             else:
-                freqs = self.rope_encode_comfy(F, H, W, freq_offset=freq_offset, ntk_alphas=ntk_alphas, attn_cond=attn_cond, device=x.device, dtype=x.dtype)
+                freqs = self.rope_encode_comfy(F, H, W, freq_offset=freq_offset, ntk_alphas=ntk_alphas, attn_cond_shape=attn_cond_shape, device=x.device, dtype=x.dtype)
                 if s2v_ref_latent is not None:
                     freqs_ref = self.rope_encode_comfy(
                         s2v_ref_latent.shape[2], 
