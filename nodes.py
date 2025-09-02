@@ -3209,9 +3209,10 @@ class WanVideoSampler:
                                         partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0], new_init_image], dim=0)
                                     elif context_reference_latent.shape[0] > 1:
                                         num_extra_inits = context_reference_latent.shape[0]
+                                        section_size = (latent_video_length / num_extra_inits)
                                         extra_init_index = min(int(max(c) / section_size), num_extra_inits - 1)
                                         if context_options["verbose"]:
-                                            log.info(f"extra_init_index: {extra_init_index}")
+                                            log.info(f"extra init image index: {extra_init_index}")
                                         new_init_image = context_reference_latent[extra_init_index, :, 0].to(intermediate_device)
                                         partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0], new_init_image], dim=0)
                                 else:
