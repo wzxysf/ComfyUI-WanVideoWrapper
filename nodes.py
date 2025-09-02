@@ -986,9 +986,6 @@ class WanVideoImageToVideoEncode:
         vae.model.clear_cache()
         del concatenated
 
-        if start_image is None and end_image is None:
-            y = torch.cat([mask, y])
-
         has_ref = False
         if extra_latents is not None:
             samples = extra_latents["samples"].squeeze(0)
