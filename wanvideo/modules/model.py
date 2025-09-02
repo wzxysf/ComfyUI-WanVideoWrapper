@@ -1994,6 +1994,7 @@ class WanModel(torch.nn.Module):
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
         assert seq_lens.max() <= seq_len
 
+        cond_mask_weight = None
         if self.trainable_cond_mask is not None:
             cond_mask_weight = self.trainable_cond_mask.weight.to(x[0]).unsqueeze(1).unsqueeze(1)
 
