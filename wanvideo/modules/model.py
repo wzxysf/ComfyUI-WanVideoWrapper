@@ -2024,9 +2024,9 @@ class WanModel(torch.nn.Module):
             end_ref_latent = s2v_ref_latent.squeeze(0)
         elif phantom_ref is not None:
             end_ref_latent = phantom_ref
-            F += end_ref_latent_frames
         if end_ref_latent is not None:
             end_ref_latent_frames = end_ref_latent.size(1)
+            F += end_ref_latent_frames
             end_ref_latent = self.original_patch_embedding(end_ref_latent.unsqueeze(0).to(torch.float32)).to(x[0].dtype)
             end_ref_latent = end_ref_latent.flatten(2).transpose(1, 2)
             if cond_mask_weight is not None:
