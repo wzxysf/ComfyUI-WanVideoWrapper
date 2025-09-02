@@ -986,6 +986,9 @@ class WanVideoImageToVideoEncode:
         vae.model.clear_cache()
         del concatenated
 
+        if start_image is None and end_image is None:
+            y = torch.cat([mask, y])
+
         has_ref = False
         if extra_latents is not None:
             samples = extra_latents["samples"].squeeze(0)
@@ -1500,7 +1503,7 @@ class WanVideoContextOptions:
             "freenoise":freenoise,
             "verbose":verbose,
             "fuse_method":fuse_method,
-            "reference_latent":reference_latent["samples"][0] if reference_latent is not None else None,
+            "reference_latent":reference_latent["samples"] if reference_latent is not None else None,
         }
 
         return (context_options,)
@@ -3199,18 +3202,18 @@ class WanVideoSampler:
                             partial_control_latents = None
                             if image_cond is not None:
                                 partial_img_emb = image_cond[:, c]
-                                
                                 if c[0] != 0 and context_reference_latent is not None:
-                                    new_init_image = context_reference_latent[:, 0].to(intermediate_device)
-                                    # Concatenate the first 4 channels of partial_img_emb with new_init_image to match the required shape
-                                    if new_init_image.shape[0] + 4 == partial_img_emb.shape[0]:
-                                        partial_img_emb[:, 0] = torch.cat([
-                                            image_cond[:4, 0],
-                                            new_init_image
-                                        ], dim=0)
-                                    else:
-                                        # fallback to original assignment if shape matches
-                                        partial_img_emb[:, 0] = new_init_image
+                                    if context_reference_latent.shape[0] == 1: #only single extra init latent
+                                        new_init_image = context_reference_latent[0, :, 0].to(intermediate_device)
+                                        # Concatenate the first 4 channels of partial_img_emb with new_init_image to match the required shape
+                                        partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0], new_init_image], dim=0)
+                                    elif context_reference_latent.shape[0] > 1:
+                                        num_extra_inits = context_reference_latent.shape[0]
+                                        extra_init_index = min(int(max(c) / section_size), num_extra_inits - 1)
+                                        if context_options["verbose"]:
+                                            log.info(f"extra_init_index: {extra_init_index}")
+                                        new_init_image = context_reference_latent[extra_init_index, :, 0].to(intermediate_device)
+                                        partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0], new_init_image], dim=0)
                                 else:
                                     new_init_image = image_cond[:, 0].to(intermediate_device)
                                     partial_img_emb[:, 0] = new_init_image
@@ -4112,6 +4115,57 @@ class WanVideoDecode:
         return (images.permute(1, 2, 3, 0),)
 
 #region VideoEncode
+class WanVideoEncodeLatentBatch:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "vae": ("WANVAE",),
+                    "images": ("IMAGE",),
+                    "enable_vae_tiling": ("BOOLEAN", {"default": False, "tooltip": "Drastically reduces memory use but may introduce seams"}),
+                    "tile_x": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
+                    "tile_y": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
+                    "tile_stride_x": ("INT", {"default": 144, "min": 32, "max": 2048, "step": 32, "tooltip": "Tile stride in pixels, smaller values use less VRAM, may introduce more seams"}),
+                    "tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2048, "step": 32, "tooltip": "Tile stride in pixels, smaller values use less VRAM, may introduce more seams"}),
+                    },
+                }
+
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("samples",)
+    FUNCTION = "encode"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Encodes a batch of images individually to create a latent video batch where each video is a single frame, useful for I2V init purposes, for example as multiple context window inits"
+
+    def encode(self, vae, images, enable_vae_tiling, tile_x, tile_y, tile_stride_x, tile_stride_y, latent_strength=1.0):
+        vae.to(device)
+
+        images = images.clone()
+
+        B, H, W, C = images.shape
+        if W % 16 != 0 or H % 16 != 0:
+            new_height = (H // 16) * 16
+            new_width = (W // 16) * 16
+            log.warning(f"Image size {W}x{H} is not divisible by 16, resizing to {new_width}x{new_height}")
+            images = common_upscale(images.movedim(-1, 1), new_width, new_height, "lanczos", "disabled").movedim(1, -1)
+
+        if images.shape[-1] == 4:
+            images = images[..., :3]
+        images = images.to(vae.dtype).to(device) * 2.0 - 1.0
+
+        latent_list = []
+        for img in images:
+            latent = vae.encode(img.unsqueeze(0).unsqueeze(0).permute(0, 4, 1, 2, 3), device=device, tiled=enable_vae_tiling, tile_size=(tile_x//vae.upsampling_factor, tile_y//vae.upsampling_factor), tile_stride=(tile_stride_x//vae.upsampling_factor, tile_stride_y//vae.upsampling_factor))
+            vae.model.clear_cache()
+            if latent_strength != 1.0:
+                latent *= latent_strength
+            latent_list.append(latent.squeeze(0).cpu())
+        latents_out = torch.stack(latent_list, dim=0)
+
+        log.info(f"WanVideoEncode: Encoded latents shape {latents_out.shape}")
+        vae.to(offload_device)
+        mm.soft_empty_cache()
+
+        return ({"samples": latents_out},)
+
 class WanVideoEncode:
     @classmethod
     def INPUT_TYPES(s):
@@ -4161,6 +4215,7 @@ class WanVideoEncode:
         else:
             latents = vae.encode(image * 2.0 - 1.0, device=device, tiled=enable_vae_tiling, tile_size=(tile_x//vae.upsampling_factor, tile_y//vae.upsampling_factor), tile_stride=(tile_stride_x//vae.upsampling_factor, tile_stride_y//vae.upsampling_factor))
             vae.model.clear_cache()
+            vae.to(offload_device)
         if latent_strength != 1.0:
             latents *= latent_strength
 
@@ -4177,6 +4232,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoClipVisionEncode": WanVideoClipVisionEncode,
     "WanVideoImageToVideoEncode": WanVideoImageToVideoEncode,
     "WanVideoEncode": WanVideoEncode,
+    "WanVideoEncodeLatentBatch": WanVideoEncodeLatentBatch,
     "WanVideoEmptyEmbeds": WanVideoEmptyEmbeds,
     "WanVideoEnhanceAVideo": WanVideoEnhanceAVideo,
     "WanVideoContextOptions": WanVideoContextOptions,
@@ -4212,6 +4268,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoClipVisionEncode": "WanVideo ClipVision Encode",
     "WanVideoImageToVideoEncode": "WanVideo ImageToVideo Encode",
     "WanVideoEncode": "WanVideo Encode",
+    "WanVideoEncodeLatentBatch": "WanVideo Encode Latent Batch",
     "WanVideoEmptyEmbeds": "WanVideo Empty Embeds",
     "WanVideoEnhanceAVideo": "WanVideo Enhance-A-Video",
     "WanVideoContextOptions": "WanVideo Context Options",
