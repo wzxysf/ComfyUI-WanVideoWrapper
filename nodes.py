@@ -888,7 +888,7 @@ class WanVideoImageToVideoEncode:
                 start_latent_strength, end_latent_strength, start_image=None, end_image=None, control_embeds=None, fun_or_fl2v_model=False, 
                 temporal_mask=None, extra_latents=None, clip_embeds=None, tiled_vae=False, add_cond_latents=None, vae=None):
         
-        if start_image is None and end_image is None:
+        if start_image is None and end_image is None and add_cond_latents is None:
             return WanVideoEmptyEmbeds().process(
                 num_frames, width, height, control_embeds=control_embeds, extra_latents=extra_latents,
             )
