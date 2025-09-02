@@ -107,7 +107,7 @@ class CustomLinear(nn.Linear):
             ).reshape(weight.shape)
             alpha = lora_diff[2] / lora_diff[1].shape[0] if lora_diff[2] is not None else 1.0
             scale = lora_strength * alpha
-            weight.add_(patch_diff, alpha=scale)
+            weight.add(patch_diff, alpha=scale)
         return weight
     
 def remove_lora_from_module(module):
