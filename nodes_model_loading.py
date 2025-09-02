@@ -330,7 +330,7 @@ class WanVideoTorchCompileSettings:
     RETURN_NAMES = ("torch_compile_args",)
     FUNCTION = "set_args"
     CATEGORY = "WanVideoWrapper"
-    DESCRIPTION = "torch.compile settings, when connected to the model loader, torch.compile of the selected layers is attempted. Requires Triton and torch 2.5.0 is recommended"
+    DESCRIPTION = "torch.compile settings, when connected to the model loader, torch.compile of the selected layers is attempted. Requires Triton and torch > 2.7.0 is recommended"
 
     def set_args(self, backend, fullgraph, mode, dynamic, dynamo_cache_size_limit, compile_transformer_blocks_only, dynamo_recompile_limit=128):
 
