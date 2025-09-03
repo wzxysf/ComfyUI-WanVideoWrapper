@@ -1887,9 +1887,7 @@ class WanVideoSampler:
         #I2V
         image_cond = image_embeds.get("image_embeds", None)
         if image_cond is not None:
-            if is_pusa:
-                image_cond_mask = image_embeds.get("mask", None)
-            elif transformer.in_dim == 16:
+            if transformer.in_dim == 16:
                 raise ValueError("T2V (text to video) model detected, encoded images only work with I2V (Image to video) models")
             elif transformer.in_dim not in [48, 32]: # fun 2.1 models don't use the mask
                 image_cond_mask = image_embeds.get("mask", None)
@@ -2315,18 +2313,7 @@ class WanVideoSampler:
         # extra latents (Pusa) and 5b
         latents_to_insert = add_index = None
         extra_latents = image_embeds.get("extra_latents", None)
-        if extra_latents is None:
-            if image_cond is not None and is_pusa: # get images for pusa if I2V node is used
-                extra_latents = image_cond
-                # Find indices where mask is 1
-                all_indices = torch.where(image_cond_mask[:, :, 0, 0].any(dim=0))[0].tolist()
-                num_extra_frames = len(all_indices)
-                if start_step == 0:
-                    for idx in all_indices:
-                        noise[:, idx] = extra_latents[:, idx].to(noise)
-                        log.info(f"Adding extra sample to latent index {idx}")
-                image_cond = None
-        elif extra_latents is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
+        if extra_latents is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
             all_indices = []
             for entry in extra_latents:
                 add_index = entry["index"]
