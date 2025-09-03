@@ -1672,14 +1672,13 @@ class WanVideoScheduler: #WIP
             try:
                 # Plot sigmas and save to a buffer
                 sigmas_np = sample_scheduler.full_sigmas.cpu().numpy()
-                if sample_scheduler.full_sigmas[-1].item() == 0:
-                    sigmas_np = sigmas_np[:-1]
+                if sample_scheduler.full_sigmas[-1].item() != 0:
+                    sigmas_np = np.append(sigmas_np, 0.0)
                 buf = io.BytesIO()
                 fig = plt.figure(facecolor='#353535')
                 ax = fig.add_subplot(111)
                 ax.set_facecolor('#353535')  # Set axes background color
-                # Create x-axis values starting from 1 instead of 0
-                x_values = range(1, len(sigmas_np) + 1)
+                x_values = range(0, len(sigmas_np))
                 ax.plot(x_values, sigmas_np)
                 ax.set_xticks(x_values)
                 ax.set_title("Sigmas", color='white')           # Title font color
@@ -1688,11 +1687,12 @@ class WanVideoScheduler: #WIP
                 ax.tick_params(axis='x', colors='white')        # X tick color
                 ax.tick_params(axis='y', colors='white')        # Y tick color
                 # Add split point if end_step is defined
-                if end_idx != -1 and 0 <= end_idx < len(sigmas_np):
-                    ax.axvline(end_idx + 1, color='red', linestyle='--', linewidth=2, label='end_step split')
+                end_idx += 1
+                if end_idx != -1 and 0 <= end_idx < len(sigmas_np) - 1:
+                    ax.axvline(end_idx, color='red', linestyle='--', linewidth=2, label='end_step split')
                 # Add split point if start_step is defined
                 if start_idx > 0 and 0 <= start_idx < len(sigmas_np):
-                    ax.axvline(start_idx + 1, color='green', linestyle='--', linewidth=2, label='start_step split')
+                    ax.axvline(start_idx, color='green', linestyle='--', linewidth=2, label='start_step split')
                 if (end_idx != -1 and 0 <= end_idx < len(sigmas_np)) or (start_idx > 0 and 0 <= start_idx < len(sigmas_np)):
                     ax.legend()
                 plt.tight_layout()
