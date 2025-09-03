@@ -76,7 +76,7 @@ class FlowMatchSchedulerPusa():
                         sigma[:, :, latent_idx] = 0
                         sigma_[:, :, latent_idx] = 0
                         continue
-                    multiplier = noise_multipliers.get(latent_idx, 1.0) if isinstance(noise_multipliers, dict) else noise_multipliers[latent_idx]
+                    multiplier = noise_multipliers[latent_idx]
                     sigma[:, :, latent_idx] = sigma[:, :, latent_idx] * multiplier
                     sigma_[:, :, latent_idx] = sigma_[:, :, latent_idx] * multiplier
 
