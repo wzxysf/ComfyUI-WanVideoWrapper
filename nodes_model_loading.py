@@ -346,7 +346,6 @@ class WanVideoTorchCompileSettings:
 
         return (compile_args, )
 
-    
 class WanVideoLoraSelect:
     @classmethod
     def INPUT_TYPES(s):
@@ -441,6 +440,36 @@ class WanVideoLoraSelect:
 
         loras_list.append(lora)
         return (loras_list,)
+    
+class WanVideoLoraSelectByName(WanVideoLoraSelect):
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+               "lora_name": ("STRING", {"default": "", "multiline": False, "tooltip": "Lora filename to load"}),
+               "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
+            },
+            "optional": {
+                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "For loading multiple LoRAs"}),
+                "blocks":("SELECTEDBLOCKS", ),
+                "low_mem_load": ("BOOLEAN", {"default": False, "tooltip": "Load the LORA model with less VRAM usage, slower loading. This affects ALL LoRAs, not just the current one. No effect if merge_loras is False"}),
+                "merge_loras": ("BOOLEAN", {"default": True, "tooltip": "Merge LoRAs into the model, otherwise they are loaded on the fly. Always disabled for GGUF and scaled fp8 models. This affects ALL LoRAs, not just the current one"}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+            },
+        }
+    
+    def getlorapath(self, lora_name, strength, unique_id, blocks={}, prev_lora=None, low_mem_load=False, merge_loras=True):
+        lora_list = folder_paths.get_filename_list("loras")
+        lora_path = "none"
+        for lora in lora_list:
+            if lora_name in lora:
+                lora_path = lora
+                log.info(f"Found LoRA file: {lora_path}")
+        return super().getlorapath(
+            lora_path, strength, unique_id, blocks=blocks, prev_lora=prev_lora, low_mem_load=low_mem_load, merge_loras=merge_loras
+        )
     
 class WanVideoLoraSelectMulti:
     @classmethod
@@ -1702,6 +1731,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoModelLoader": WanVideoModelLoader,
     "WanVideoVAELoader": WanVideoVAELoader,
     "WanVideoLoraSelect": WanVideoLoraSelect,
+    "WanVideoLoraSelectByName": WanVideoLoraSelectByName,
     "WanVideoSetLoRAs": WanVideoSetLoRAs,
     "WanVideoLoraBlockEdit": WanVideoLoraBlockEdit,
     "WanVideoTinyVAELoader": WanVideoTinyVAELoader,
@@ -1719,6 +1749,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoModelLoader": "WanVideo Model Loader",
     "WanVideoVAELoader": "WanVideo VAE Loader",
     "WanVideoLoraSelect": "WanVideo Lora Select",
+    "WanVideoLoraSelectByName": "WanVideo Lora Select By Name",
     "WanVideoSetLoRAs": "WanVideo Set LoRAs",
     "WanVideoLoraBlockEdit": "WanVideo Lora Block Edit",
     "WanVideoTinyVAELoader": "WanVideo Tiny VAE Loader",
