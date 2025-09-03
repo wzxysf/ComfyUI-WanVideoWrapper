@@ -990,7 +990,9 @@ class WanVideoModelLoader:
                 raise ValueError("GGUF models do not support LoRA merging, please disable merge_loras in the LoRA select node.")
 
         transformer_load_device = device if load_device == "main_device" else offload_device
-        
+        if lora is not None and not merge_loras:
+            transformer_load_device = offload_device
+
         base_dtype = {"fp8_e4m3fn": torch.float8_e4m3fn, "fp8_e4m3fn_fast": torch.float8_e4m3fn, "bf16": torch.bfloat16, "fp16": torch.float16, "fp16_fast": torch.float16, "fp32": torch.float32}[base_precision]
         
         if base_precision == "fp16_fast":
