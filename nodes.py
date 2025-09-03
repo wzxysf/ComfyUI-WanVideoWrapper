@@ -2346,7 +2346,11 @@ class WanVideoSampler:
         all_indices = []
         noise_multiplier_list = image_embeds.get("pusa_noise_multipliers", None)
         if noise_multiplier_list is not None:
-            noise_multipliers = torch.zeros(latent_video_length)
+            if len(noise_multiplier_list) != latent_video_length:
+                noise_multipliers = torch.zeros(latent_video_length)
+            else:
+                noise_multipliers = torch.tensor(noise_multiplier_list)
+                log.info(f"Using Pusa noise multipliers: {noise_multipliers}")
         if extra_latents is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
             if noise_multiplier_list is not None:
                 noise_multiplier_list = list(noise_multiplier_list) + [1.0] * (len(all_indices) - len(noise_multiplier_list))
@@ -2361,7 +2365,7 @@ class WanVideoSampler:
                     noise[:, add_index:add_index+num_extra_frames] = entry["samples"].to(noise)
                     log.info(f"Adding extra samples to latent indices {add_index} to {add_index+num_extra_frames-1}")
                 all_indices.extend(range(add_index, add_index+num_extra_frames))
-            if noise_multipliers is not None:
+            if noise_multipliers is not None and len(noise_multiplier_list) != latent_video_length:
                 for i, idx in enumerate(all_indices):
                     noise_multipliers[idx] = noise_multiplier_list[i]
                 log.info(f"Using Pusa noise multipliers: {noise_multipliers}")
