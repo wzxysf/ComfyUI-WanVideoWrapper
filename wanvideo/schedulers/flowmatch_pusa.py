@@ -41,7 +41,7 @@ class FlowMatchSchedulerPusa():
             self.linear_timesteps_weights = bsmntw_weighing
 
 
-    def step(self, model_output, timestep, sample, to_final=False, **kwargs):
+    def step(self, model_output, timestep, sample, to_final=False, cond_frame_latent_indices=None, noise_multipliers=None, **kwargs):
         if isinstance(timestep, torch.Tensor):
             self.timesteps = self.timesteps.to(timestep.device)
             self.sigmas = self.sigmas.to(timestep.device)
@@ -60,6 +60,7 @@ class FlowMatchSchedulerPusa():
                 sigma_ = torch.where(timestep == 0, torch.zeros_like(sigma_), sigma_)
             prev_sample = sample + model_output * (sigma_ - sigma)
         else:
+            timestep_full = timestep.clone()
             timestep_id = torch.argmin((self.timesteps.unsqueeze(1) - timestep).abs(), dim=0)
             sigma = self.sigmas[timestep_id].unsqueeze(0).unsqueeze(1).unsqueeze(3).unsqueeze(4).to(sample.device)
             sigma_ = torch.zeros_like(timestep_id, dtype=self.sigmas.dtype, device=sample.device)
@@ -67,6 +68,18 @@ class FlowMatchSchedulerPusa():
             not_last = ~last_step
             sigma_[not_last] = self.sigmas[(timestep_id[not_last] + 1).to(torch.long)]
             sigma_ = sigma_.unsqueeze(0).unsqueeze(1).unsqueeze(3).unsqueeze(4).to(sample.device)
+
+            # noise multipliers
+            if cond_frame_latent_indices is not None and noise_multipliers is not None:
+                for latent_idx in cond_frame_latent_indices:
+                    if timestep_full[:, latent_idx] == 0:
+                        sigma[:, :, latent_idx] = 0
+                        sigma_[:, :, latent_idx] = 0
+                        continue
+                    multiplier = noise_multipliers.get(latent_idx, 1.0) if isinstance(noise_multipliers, dict) else noise_multipliers[latent_idx]
+                    sigma[:, :, latent_idx] = sigma[:, :, latent_idx] * multiplier
+                    sigma_[:, :, latent_idx] = sigma_[:, :, latent_idx] * multiplier
+
             # Zero sigma and sigma_ for batch indices where timestep == 0
             zero_indices = (timestep[0] == 0).nonzero(as_tuple=True)[0]
             if zero_indices.numel() > 0:
@@ -105,6 +118,24 @@ class FlowMatchSchedulerPusa():
             sigma = self.sigmas[timestep_id].unsqueeze(0).unsqueeze(1).unsqueeze(3).unsqueeze(4).to(original_samples.device)
         sample = (1 - sigma) * original_samples + sigma * noise
         
+        return sample
+    
+    def add_noise_for_conditioning_frames(self, original_samples, noise, timestep, noise_multiplier=None):
+        if isinstance(timestep, torch.Tensor):
+            self.timesteps = self.timesteps.to(timestep.device)
+            self.sigmas = self.sigmas.to(timestep.device)
+        if len(timestep.shape) == 1:
+            timestep_id = torch.argmin((self.timesteps - timestep).abs())
+            sigma = self.sigmas[timestep_id]
+        else:
+            timestep_id = torch.argmin((self.timesteps.unsqueeze(1) - timestep).abs(), dim=0)
+            sigma = self.sigmas[timestep_id].unsqueeze(0).unsqueeze(1).unsqueeze(3).unsqueeze(4).to(original_samples.device)            
+            sigma= sigma * noise_multiplier # timestep = sigma * 1000, equivalent, so directly use multiplier here
+        
+        sample = (1 - sigma) * original_samples + sigma * noise
+
+        #print("add noise sigma:", sigma,"noise_multiplier:", noise_multiplier, "timestep:", timestep)
+
         return sample
     
 

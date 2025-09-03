@@ -1264,6 +1264,29 @@ class WanVideoAddControlEmbeds:
 
         return (updated,)
     
+class WanVideoAddPusaNoise:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+            "embeds": ("WANVIDIMAGE_EMBEDS",),
+            "noise_multipliers": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Noise multipliers for Pusa, can be a list of floats"}),
+            "noisy_steps": ("INT", {"default": -1, "min": -1, "max": 1000, "tooltip": "Number steps to apply the extra noise"}),
+            },
+        }
+
+    RETURN_TYPES = ("WANVIDIMAGE_EMBEDS", )
+    RETURN_NAMES = ("image_embeds",)
+    FUNCTION = "add"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Adds latent and timestep noise multipliers when using flowmatch_pusa"
+
+    def add(self, embeds, noise_multipliers, noisy_steps):
+        updated = dict(embeds)
+        updated["pusa_noise_multipliers"] = noise_multipliers
+        updated["pusa_noisy_steps"] = noisy_steps
+
+        return (updated,)
+    
 class WanVideoSLG:
     @classmethod
     def INPUT_TYPES(s):
@@ -2313,8 +2336,8 @@ class WanVideoSampler:
         # extra latents (Pusa) and 5b
         latents_to_insert = add_index = None
         extra_latents = image_embeds.get("extra_latents", None)
+        all_indices = []
         if extra_latents is not None and transformer.multitalk_model_type.lower() != "infinitetalk":
-            all_indices = []
             for entry in extra_latents:
                 add_index = entry["index"]
                 num_extra_frames = entry["samples"].shape[2]
@@ -2983,6 +3006,16 @@ class WanVideoSampler:
             # Set latent for denoising
             latent = current_latent
 
+            if is_pusa and all_indices:
+                noise_multipliers = image_embeds.get("pusa_noise_multipliers", None)
+                pusa_noisy_steps = image_embeds.get("pusa_noisy_steps", -1)
+                if pusa_noisy_steps == -1:
+                    pusa_noisy_steps = len(timesteps)
+                if noise_multipliers is not None:
+                    if len(noise_multipliers) < len(all_indices):
+                        noise_multipliers = list(noise_multipliers) + [1.0] * (len(all_indices) - len(noise_multipliers))
+                    #pusa_noise_flag = torch.zeros(latent_video_length)
+
             try:
                 pbar = ProgressBar(len(timesteps))
                 #region main loop start
@@ -3009,13 +3042,30 @@ class WanVideoSampler:
                     current_step_percentage = idx / len(timesteps)
 
                     timestep = torch.tensor([t]).to(device)
-                    if is_pusa or (is_5b and 'all_indices' in locals()):
+                    if is_pusa or (is_5b and all_indices):
                         orig_timestep = timestep
                         timestep = timestep.unsqueeze(1).repeat(1, latent_video_length)
                         if extra_latents is not None:
-                            if 'all_indices' in locals() and all_indices:
+                            if all_indices and noise_multipliers is not None:
+                                if is_pusa:
+                                    scheduler_step_args["cond_frame_latent_indices"] = all_indices
+                                    scheduler_step_args["noise_multipliers"] = noise_multipliers
+                                for latent_idx, multiplier in zip(all_indices, noise_multipliers):
+                                    timestep[:, latent_idx] = timestep[:, latent_idx] * multiplier
+                                    # add noise for conditioning frames if multiplier > 0
+                                    if idx < pusa_noisy_steps and multiplier > 0:
+                                        latent_size = (1, latent.shape[0], latent.shape[1], latent.shape[2], latent.shape[3])
+                                        noise_for_cond = torch.randn(latent_size, generator=seed_g, device=torch.device("cpu"))
+                                        timestep_cond = torch.ones_like(timestep) * timestep.max()
+                                        if is_pusa:
+                                            latent[:, latent_idx:latent_idx+1] = sample_scheduler.add_noise_for_conditioning_frames(
+                                                latent[:, latent_idx:latent_idx+1].to(device),
+                                                noise_for_cond[:, :, latent_idx:latent_idx+1].to(device),
+                                                timestep_cond[:, latent_idx:latent_idx+1].to(device),
+                                                noise_multiplier=multiplier)
+                            else:
                                 timestep[:, all_indices] = 0
-                            #print("timestep: ", timestep)
+                            print("timestep: ", timestep)
 
                     ### latent shift
                     if latent_shift_loop:
@@ -4243,6 +4293,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoAddControlEmbeds": WanVideoAddControlEmbeds,
     "WanVideoAddMTVMotion": WanVideoAddMTVMotion,
     "WanVideoRoPEFunction": WanVideoRoPEFunction,
+    "WanVideoAddPusaNoise": WanVideoAddPusaNoise
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoSampler": "WanVideo Sampler",
@@ -4278,4 +4329,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoAddControlEmbeds": "WanVideo Add Control Embeds",
     "WanVideoAddMTVMotion": "WanVideo MTV Crafter Motion",
     "WanVideoRoPEFunction": "WanVideo RoPE Function",
-    }
+    "WanVideoAddPusaNoise": "WanVideo Add Pusa Noise",
+}
