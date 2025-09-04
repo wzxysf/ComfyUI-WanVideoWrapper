@@ -547,10 +547,13 @@ class WanVideoTextEncodeSingle:
             raise ValueError("No cached text embeds found for prompts, please provide a T5 encoder.")
 
         if encoded is None:
-            if model_to_offload is not None and device == "gpu":
-                log.info(f"Moving video model to {offload_device}")
-                model_to_offload.model.to(offload_device)
-                mm.soft_empty_cache()
+            try:
+                if model_to_offload is not None and device == "gpu":
+                    log.info(f"Moving video model to {offload_device}")
+                    model_to_offload.model.to(offload_device)
+                    mm.soft_empty_cache()
+            except:
+                pass
 
             encoder = t5["model"]
             dtype = t5["dtype"]
