@@ -3559,8 +3559,6 @@ class WanVideoSampler:
                                     load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
                                 elif gguf_reader is not None: #handle GGUF
                                     load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
-                                    set_lora_params_gguf(transformer, patcher.patches)
-                                    transformer.patched_linear = True
 
                                 #blockswap init
                                 if not transformer.patched_linear:
