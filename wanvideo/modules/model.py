@@ -813,14 +813,14 @@ class WanAttentionBlock(nn.Module):
         self.modulation = nn.Parameter(torch.randn(1, 6, out_features) / in_features**0.5)
         self.seg_idx = None
 
-    @torch.compiler.disable()
+    #@torch.compiler.disable()
     def get_mod(self, e):
         if e.dim() == 3:
             return (self.modulation  + e).chunk(6, dim=1) # 1, 6, dim
         elif e.dim() == 4:
-            e = (self.modulation.unsqueeze(2) + e).chunk(6, dim=1) # 1, 6, 1, dim
-            return [ei.squeeze(1) for ei in e]
-    
+            e_mod = self.modulation.unsqueeze(2) + e
+            return [ei.squeeze(1) for ei in e_mod.unbind(dim=1)]
+
     def modulate(self, x, shift_msa, scale_msa, seg_idx=None):
         """
         Modulate x with shift and scale. If seg_idx is provided, apply segmented modulation.
@@ -915,7 +915,9 @@ class WanAttentionBlock(nn.Module):
             e = e[0]
 
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.get_mod(e.to(x.device))
+        del e
         input_x = self.modulate(x, shift_msa, scale_msa, seg_idx=self.seg_idx)
+        del shift_msa, scale_msa
 
         if x_ip is not None:
             shift_msa_ip, scale_msa_ip, gate_msa_ip, shift_mlp_ip, scale_mlp_ip, gate_mlp_ip = self.get_mod(e_ip.to(x.device))
@@ -1039,6 +1041,7 @@ class WanAttentionBlock(nn.Module):
             x = x.add(y)
         else:
             x = x.addcmul(y, gate_msa)
+        del y, gate_msa
 
         # cross-attention & ffn function
         if context is not None:
@@ -1058,6 +1061,7 @@ class WanAttentionBlock(nn.Module):
             else:
                 y = self.ffn(torch.addcmul(shift_mlp, self.norm2(x), 1 + scale_mlp))
             x = x.addcmul(y, gate_mlp)
+        del gate_mlp
 
         if x_ip is not None:
             x_ip = x_ip.addcmul(y_ip, gate_msa_ip)
@@ -1100,7 +1104,9 @@ class WanAttentionBlock(nn.Module):
                     norm2_x = torch.cat(parts, dim=1)
                     y = self.ffn(norm2_x)
                 else:
-                    y = self.ffn(torch.addcmul(shift_mlp, norm2_x, 1 + scale_mlp))
+                    input_x = torch.addcmul(shift_mlp, norm2_x, 1 + scale_mlp)
+                    del shift_mlp, scale_mlp, norm2_x
+                    y = self.ffn(input_x)
             if self.zero_timestep:
                 z = []
                 for i in range(2):
