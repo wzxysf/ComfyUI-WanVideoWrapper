@@ -3376,6 +3376,7 @@ class WanVideoSampler:
                         log.info(f"Multitalk mode: {mode}")
                         cond_frame = None
                         offload = image_embeds.get("force_offload", False)
+                        offloaded = False
                         tiled_vae = image_embeds.get("tiled_vae", False)
                         frame_num = clip_length = image_embeds.get("num_frames", 81)
                         vae = image_embeds.get("vae", None)
@@ -3552,11 +3553,18 @@ class WanVideoSampler:
                                 add_latent = add_noise(latent_motion_frames, motion_add_noise, timesteps[0])
                                 latent[:, :add_latent.shape[1]] = add_latent
 
-                            if offload:
+                            if offloaded:
+                                # Load weights
+                                if transformer.patched_linear and gguf_reader is None:
+                                    load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
+                                elif gguf_reader is not None: #handle GGUF
+                                    load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
+                                    set_lora_params_gguf(transformer, patcher.patches)
+                                    transformer.patched_linear = True
+
                                 #blockswap init
                                 if not transformer.patched_linear:
                                     if block_swap_args is not None:
-                                        transformer.use_non_blocking = block_swap_args.get("use_non_blocking", False)
                                         for name, param in transformer.named_parameters():
                                             if "block" not in name:
                                                 param.data = param.data.to(device)
@@ -3705,6 +3713,7 @@ class WanVideoSampler:
                             del noise, latent_motion_frames
                             if offload:
                                 offload_transformer(transformer)
+                                offloaded = True
                             vae.to(device)
                             videos = vae.decode(latent.unsqueeze(0).to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False)[0].cpu()
                             vae.model.clear_cache()
