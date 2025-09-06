@@ -3441,6 +3441,10 @@ class WanVideoSampler:
                         estimated_iterations = total_frames // (frame_num - motion_frame) + 1
                         callback = prepare_callback(patcher, estimated_iterations)
 
+                        if frame_num >= total_frames:
+                            arrive_last_frame = True
+                            estimated_iterations = 1
+
                         log.info(f"Sampling {total_frames} frames in {estimated_iterations} windows, at {latent.shape[3]*vae_upscale_factor}x{latent.shape[2]*vae_upscale_factor} with {steps} steps")
 
                         while True: # start video generation iteratively
