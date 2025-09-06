@@ -866,7 +866,6 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         if cnt % 100 == 0:
             pbar.update(100)
 
-    pbar.update_absolute(param_count)
     pbar.update_absolute(0)
 
 def patch_control_lora(transformer, device):
@@ -995,9 +994,8 @@ class WanVideoModelLoader:
             extra_model = vace_model
         lora_low_mem_load = merge_loras = False
         if lora is not None:
-            for l in lora:
-                lora_low_mem_load = l.get("low_mem_load", False)
-                merge_loras = l.get("merge_loras", True)
+            merge_loras = any(l.get("merge_loras", True) for l in lora)
+            lora_low_mem_load = any(l.get("low_mem_load", False) for l in lora)
 
         transformer = None
         mm.unload_all_models()
@@ -1372,7 +1370,7 @@ class WanVideoModelLoader:
                 log.info("Merging LoRA to the model...")
                 patcher = apply_lora(
                     patcher, device, transformer_load_device, params_to_keep=params_to_keep, dtype=weight_dtype, base_dtype=base_dtype, state_dict=sd, 
-                    low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights,)
+                    low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights)
                 if not control_lora:
                     scale_weights.clear()
                     patcher.patches.clear()
