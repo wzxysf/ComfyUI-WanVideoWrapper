@@ -24,7 +24,7 @@ from contextlib import nullcontext
 from einops import rearrange
 
 from comfy import model_management as mm
-from comfy.utils import ProgressBar, common_upscale
+from comfy.utils import ProgressBar, common_upscale, load_torch_file
 from comfy.clip_vision import clip_preprocess, ClipVisionModel
 from comfy.cli_args import args, LatentPreviewMethod
 import folder_paths
@@ -3429,6 +3429,14 @@ class WanVideoSampler:
                                 "end": uni3c_embeds["end"],
                             }
 
+                        encoded_silence = None
+                       
+                        try:
+                            silence_path = os.path.join(script_directory, "multitalk", "encoded_silence.safetensors")
+                            encoded_silence = load_torch_file(silence_path)["audio_emb"].to(dtype)
+                        except:
+                             log.warning("No encoded silence file found, padding with end of audio embedding instead.")
+
                         total_frames = len(audio_embedding[0])
                         estimated_iterations = total_frames // (frame_num - motion_frame) + 1
                         callback = prepare_callback(patcher, estimated_iterations)
@@ -3768,9 +3776,14 @@ class WanVideoSampler:
                                         source_frame = len(audio_embedding[human_inx])
                                         source_frames.append(source_frame)
                                         if audio_end_idx >= len(audio_embedding[human_inx]):
-                                            miss_length   = audio_end_idx - len(audio_embedding[human_inx]) + 3 
-                                            add_audio_emb = torch.flip(audio_embedding[human_inx][-1*miss_length:], dims=[0])
-                                            audio_embedding[human_inx] = torch.cat([audio_embedding[human_inx], add_audio_emb], dim=0)
+                                            print(f"Audio embedding for subject {human_inx} not long enough: {len(audio_embedding[human_inx])}, need {audio_end_idx}, padding...")
+                                            miss_length = audio_end_idx - len(audio_embedding[human_inx]) + 3
+                                            print(f"Padding length: {miss_length}")
+                                            if encoded_silence is not None:
+                                                add_audio_emb = encoded_silence[-1*miss_length:]
+                                            else:
+                                                add_audio_emb = torch.flip(audio_embedding[human_inx][-1*miss_length:], dims=[0])
+                                            audio_embedding[human_inx] = torch.cat([audio_embedding[human_inx], add_audio_emb.to(device, dtype)], dim=0)
                                             miss_lengths.append(miss_length)
                                         else:
                                             miss_lengths.append(0)
