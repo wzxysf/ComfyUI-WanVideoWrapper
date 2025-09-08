@@ -448,6 +448,26 @@ class NormalizeAudioLoudness:
         normalized_audio = pyloudnorm.normalize.loudness(audio_array, loudness, lufs)
         return normalized_audio
     
+class WanVideoPassImagesFromSamples:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "samples": ("LATENT",),
+                }
+                }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    FUNCTION = "decode"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Gets possible already decoded images from the samples dictionary, used with Multi/InfiniteTalk sampling"
+
+    def decode(self, samples):
+        video = samples.get("video", None)
+        video.clamp_(-1.0, 1.0)
+        video.add_(1.0).div_(2.0)
+        return video.cpu().float(),
+    
 NODE_CLASS_MAPPINGS = {
     "WanVideoImageResizeToClosest": WanVideoImageResizeToClosest,
     "WanVideoVACEStartToEndFrame": WanVideoVACEStartToEndFrame,
@@ -457,7 +477,8 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoLatentReScale": WanVideoLatentReScale,
     "CreateScheduleFloatList": CreateScheduleFloatList,
     "WanVideoSigmaToStep": WanVideoSigmaToStep,
-    "NormalizeAudioLoudness": NormalizeAudioLoudness
+    "NormalizeAudioLoudness": NormalizeAudioLoudness,
+    "WanVideoPassImagesFromSamples": WanVideoPassImagesFromSamples,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoImageResizeToClosest": "WanVideo Image Resize To Closest",
@@ -468,5 +489,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoLatentReScale": "WanVideo Latent ReScale",
     "CreateScheduleFloatList": "Create Schedule Float List",
     "WanVideoSigmaToStep": "WanVideo Sigma To Step",
-    "NormalizeAudioLoudness": "Normalize Audio Loudness"
+    "NormalizeAudioLoudness": "Normalize Audio Loudness",
+    "WanVideoPassImagesFromSamples": "WanVideo Pass Images From Samples",
 }

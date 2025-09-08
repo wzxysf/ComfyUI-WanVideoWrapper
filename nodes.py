@@ -5,6 +5,7 @@ import numpy as np
 from tqdm import tqdm
 import inspect
 import copy
+from PIL import Image
 import hashlib
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
@@ -3391,6 +3392,9 @@ class WanVideoSampler:
                         if original_images is None:
                             original_images = torch.zeros([noise.shape[0], 1, target_h, target_w], device=device)
 
+                        output_path = image_embeds.get("output_path", "")
+                        img_counter = 0
+
                         if len(multitalk_embeds['audio_features'])==2 and (multitalk_embeds['ref_target_masks'] is None):
                             face_scale = 0.1
                             x_min, x_max = int(target_h * face_scale), int(target_h * (1 - face_scale))
@@ -3746,7 +3750,17 @@ class WanVideoSampler:
                         
                                 videos = torch.stack(cm_result_list, dim=0).permute(3, 0, 1, 2)
 
-                            # cache generated samples
+                            # optionally save generated samples to disk
+                            if output_path:
+                                video_np = videos.clamp(-1.0, 1.0).add(1.0).div(2.0).mul(255).cpu().float().numpy().transpose(1, 2, 3, 0).astype('uint8')
+                                num_frames_to_save = video_np.shape[0] if is_first_clip else video_np.shape[0] - cur_motion_frames_num
+                                log.info(f"Saving {num_frames_to_save} generated frames to {output_path}")
+                                start_idx = 0 if is_first_clip else cur_motion_frames_num
+                                for i in range(start_idx, video_np.shape[0]):
+                                    im = Image.fromarray(video_np[i])
+                                    im.save(os.path.join(output_path, f"frame_{img_counter:05d}.png"))
+                                    img_counter += 1
+                                
                             gen_video_list.append(videos if is_first_clip else videos[:, cur_motion_frames_num:])
 
                             current_condframe_index += 1
