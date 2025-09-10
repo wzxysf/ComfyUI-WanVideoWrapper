@@ -1974,8 +1974,6 @@ class WanModel(torch.nn.Module):
             hidden_states = x[0].unsqueeze(0).clone().float()
             if hidden_states.shape[1] == 16: #T2V work around
                 hidden_states = torch.cat([hidden_states, torch.zeros_like(hidden_states[:, :4])], dim=1)
-            if render_latent.shape[2] != hidden_states.shape[2]:
-                render_latent = torch.nn.functional.interpolate(render_latent, size=(hidden_states.shape[2], render_latent.shape[3], render_latent.shape[4]), mode='trilinear', align_corners=False)
             render_latent = torch.cat([hidden_states[:, :20], render_latent], dim=1)
 
         # embeddings
