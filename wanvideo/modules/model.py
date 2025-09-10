@@ -1970,10 +1970,13 @@ class WanModel(torch.nn.Module):
         
         #uni3c controlnet
         if pcd_data is not None:
+            render_latent = pcd_data["render_latent"].to(x[0].dtype)
             hidden_states = x[0].unsqueeze(0).clone().float()
             if hidden_states.shape[1] == 16: #T2V work around
                 hidden_states = torch.cat([hidden_states, torch.zeros_like(hidden_states[:, :4])], dim=1)
-            render_latent = torch.cat([hidden_states[:, :20], pcd_data["render_latent"].to(x[0].dtype)], dim=1)
+            if render_latent.shape[2] != hidden_states.shape[2]:
+                render_latent = torch.cat([render_latent, render_latent[:, :, :1]], dim=2)
+            render_latent = torch.cat([hidden_states[:, :20], render_latent], dim=1)
 
         # embeddings
         if control_lora_enabled:
