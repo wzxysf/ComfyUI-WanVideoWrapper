@@ -761,7 +761,7 @@ class WanVideoSetLoRAs:
 def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
                  transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
     params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", 
-                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer"}
+                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob"}
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     cnt = 0
@@ -1112,6 +1112,8 @@ class WanVideoModelLoader:
         ffn_dim = sd["blocks.0.ffn.0.bias"].shape[0]
         ffn2_dim = sd["blocks.0.ffn.2.weight"].shape[1]
 
+        is_humo = "audio_proj.audio_proj_glob_1.layer.weight" in sd
+
         model_type = "t2v"
         if "audio_injector.injector.0.k.weight" in sd:
             model_type = "s2v"
@@ -1226,6 +1228,7 @@ class WanVideoModelLoader:
             "enable_adain": True if "audio_injector.injector_adain_layers.0.linear.weight" in sd else False,
             "cond_dim": sd["cond_encoder.weight"].shape[1] if "cond_encoder.weight" in sd else 0,
             "zero_timestep": model_type == "s2v",
+            "humo_audio": is_humo,
 
         }
 
