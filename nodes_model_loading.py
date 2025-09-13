@@ -1078,11 +1078,13 @@ class WanVideoModelLoader:
         if extra_model is not None:
             if gguf:
                 if not extra_model["path"].endswith(".gguf"):
-                    raise ValueError("With GGUF main model the extra model must also be a GGUF quantized, if the main model already has extra included, you can disconnect the extra module loader")
+                    raise ValueError("With GGUF main model the extra model must also be GGUF quantized, if the main model already has VACE included, you can disconnect the extra module loader")
                 extra_sd, extra_reader = load_gguf(extra_model["path"])
                 gguf_reader.append(extra_reader)
                 del extra_reader
             else:
+                if extra_model["path"].endswith(".gguf"):
+                    raise ValueError("With GGUF extra model the main model must also be GGUF quantized model")
                 extra_sd = load_torch_file(extra_model["path"], device=transformer_load_device, safe_load=True)
             sd.update(extra_sd)
             del extra_sd
