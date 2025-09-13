@@ -212,13 +212,13 @@ class HuMoEmbeds:
                 reference_images_in = common_upscale(reference_images.movedim(-1, 1), width, height, "lanczos", "disabled").movedim(-1, 1)
             else:
                 reference_images_in = reference_images
-            samples, = WanVideoEncodeLatentBatch.encode(self, vae, reference_images_in, False, 0, 0, 0, 0)
+            samples, = WanVideoEncodeLatentBatch.encode(self, vae, reference_images_in, tiled_vae, 0, 0, 0, 0)
             samples = samples["samples"].transpose(0, 2).squeeze(0)
             num_refs = samples.shape[1]
 
         vae.to(device)
         zero_frames = torch.zeros(1, 3, pixel_frame_num + 4*num_refs, height, width, device=device, dtype=vae.dtype)
-        zero_latents = vae.encode(zero_frames, device=device, tiled_vae=tiled_vae)[0].to(offload_device)
+        zero_latents = vae.encode(zero_frames, device=device, tiled=tiled_vae)[0].to(offload_device)
         vae.model.clear_cache()
         vae.to(offload_device)
         mm.soft_empty_cache()
