@@ -2676,10 +2676,13 @@ class WanVideoSampler:
                 elif humo_image_cond is not None:
                     if context_window is not None:
                         image_cond_input = humo_image_cond[:, context_window].to(z)
+                        humo_image_cond_neg_input = humo_image_cond_neg[:, context_window].to(z)
                         if humo_reference_count > 0:
                             image_cond_input[:, -humo_reference_count:] = humo_image_cond[:, -humo_reference_count:]
+                            humo_image_cond_neg_input[:, -humo_reference_count:] = humo_image_cond_neg[:, -humo_reference_count:]
                     else:
                         image_cond_input = humo_image_cond.to(z)
+                        humo_image_cond_neg_input = humo_image_cond_neg.to(z)
                 elif image_cond is not None:
                     if reverse_time: # Flip the image condition
                         image_cond_input = torch.cat([
@@ -2887,8 +2890,8 @@ class WanVideoSampler:
                         if humo_audio_input_neg is not None and not math.isclose(humo_audio_cfg_scale[idx], 1.0):
                             if cache_state is not None and len(cache_state) != 3:
                                 cache_state.append(None)
-                            if t > 980 and humo_image_cond_neg is not None: # use image cond for first timesteps
-                                base_params['y'] = [humo_image_cond_neg.to(z)]
+                            if t > 980 and humo_image_cond_neg_input is not None: # use image cond for first timesteps
+                                base_params['y'] = [humo_image_cond_neg_input]
                             
                             noise_pred_humo_audio_uncond, cache_state_humo = transformer(
                             context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
