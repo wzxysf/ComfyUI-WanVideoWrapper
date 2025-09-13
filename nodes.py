@@ -2787,8 +2787,15 @@ class WanVideoSampler:
                 
                 if humo_audio is not None and ((humo_start_percent <= current_step_percentage <= humo_end_percent) or \
                             (humo_end_percent > 0 and idx == 0 and current_step_percentage >= humo_start_percent)):
-                    humo_audio_input = humo_audio
-                    humo_audio_input_neg = humo_audio_neg if humo_audio_neg is not None else None
+                    if context_window is None:
+                        humo_audio_input = humo_audio
+                        humo_audio_input_neg = humo_audio_neg if humo_audio_neg is not None else None
+                    else:
+                        humo_audio_input = humo_audio[context_window].to(z)
+                        if humo_audio_neg is not None:
+                            humo_audio_input_neg = humo_audio_neg[context_window].to(z)
+                        else:
+                            humo_audio_input_neg = None
                 else:
                     humo_audio_input = humo_audio_input_neg = None
 
