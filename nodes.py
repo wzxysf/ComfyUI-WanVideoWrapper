@@ -2676,7 +2676,8 @@ class WanVideoSampler:
                 elif humo_image_cond is not None:
                     if context_window is not None:
                         image_cond_input = humo_image_cond[:, context_window].to(z)
-                        image_cond_input[:, -humo_reference_count:] = humo_image_cond[:, -humo_reference_count:]
+                        if humo_reference_count > 0:
+                            image_cond_input[:, -humo_reference_count:] = humo_image_cond[:, -humo_reference_count:]
                     else:
                         image_cond_input = humo_image_cond.to(z)
                 elif image_cond is not None:
@@ -4085,7 +4086,7 @@ class WanVideoSampler:
                                 callback_latent = (latent_model_input[:, :orig_noise_len].to(device) - noise_pred[:, :orig_noise_len].to(device) * t.to(device) / 1000).detach()
                             #elif phantom_latents is not None:
                             #    callback_latent = (latent_model_input[:,:-phantom_latents.shape[1]].to(device) - noise_pred[:,:-phantom_latents.shape[1]].to(device) * t.to(device) / 1000).detach()
-                            elif humo_image_cond is not None:
+                            elif humo_image_cond is not None and humo_reference_count > 0:
                                 callback_latent = (latent_model_input[:,:-humo_reference_count].to(device) - noise_pred[:,:-humo_reference_count].to(device) * t.to(device) / 1000).detach()
                             else:
                                 callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach()
@@ -4107,7 +4108,7 @@ class WanVideoSampler:
 
         if phantom_latents is not None:
             latent = latent[:,:-phantom_latents.shape[1]]
-        if humo_image_cond is not None:
+        if humo_image_cond is not None and humo_reference_count > 0:
             latent = latent[:,:-humo_reference_count]
         
         cache_states = None
