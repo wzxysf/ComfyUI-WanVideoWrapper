@@ -133,6 +133,7 @@ class HuMoEmbeds:
                 "vae": ("WANVAE", ),
                 "reference_images": ("IMAGE", {"tooltip": "reference images for the humo model"}),
                 "audio": ("AUDIO",),
+                "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
             }
         }
 
@@ -141,7 +142,7 @@ class HuMoEmbeds:
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
 
-    def process(self, num_frames, width, height, audio_scale, audio_cfg_scale, audio_start_percent, audio_end_percent, whisper_model=None, vae=None, reference_images=None, audio=None):
+    def process(self, num_frames, width, height, audio_scale, audio_cfg_scale, audio_start_percent, audio_end_percent, whisper_model=None, vae=None, reference_images=None, audio=None, tiled_vae=False):
         if reference_images is not None and vae is None:
             raise ValueError("VAE is required when reference images are provided")
         if whisper_model is None and audio is not None:
@@ -217,7 +218,7 @@ class HuMoEmbeds:
 
         vae.to(device)
         zero_frames = torch.zeros(1, 3, pixel_frame_num + 4*num_refs, height, width, device=device, dtype=vae.dtype)
-        zero_latents = vae.encode(zero_frames, device=device)[0].to(offload_device)
+        zero_latents = vae.encode(zero_frames, device=device, tiled_vae=tiled_vae)[0].to(offload_device)
         vae.model.clear_cache()
         vae.to(offload_device)
         mm.soft_empty_cache()
@@ -235,8 +236,6 @@ class HuMoEmbeds:
             mask = torch.zeros_like(mask)
         image_cond = torch.cat([mask, image_cond], dim=0)
         image_cond_neg = torch.cat([mask, zero_latents], dim=0)
-
-       
 
         embeds = {
             "humo_audio_emb": audio_emb,
