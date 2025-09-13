@@ -212,7 +212,7 @@ class HuMoEmbeds:
                 reference_images_in = common_upscale(reference_images.movedim(-1, 1), width, height, "lanczos", "disabled").movedim(-1, 1)
             else:
                 reference_images_in = reference_images
-            samples, = WanVideoEncodeLatentBatch.encode(self, vae, reference_images_in, tiled_vae, 0, 0, 0, 0)
+            samples, = WanVideoEncodeLatentBatch.encode(self, vae, reference_images_in, tiled_vae, None, None, None, None)
             samples = samples["samples"].transpose(0, 2).squeeze(0)
             num_refs = samples.shape[1]
 

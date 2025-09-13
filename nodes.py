@@ -3796,8 +3796,8 @@ class WanVideoSampler:
                                     im = Image.fromarray(video_np[i])
                                     im.save(os.path.join(output_path, f"frame_{img_counter:05d}.png"))
                                     img_counter += 1
-                                
-                            gen_video_list.append(videos if is_first_clip else videos[:, cur_motion_frames_num:])
+                            else:
+                                gen_video_list.append(videos if is_first_clip else videos[:, cur_motion_frames_num:])
 
                             current_condframe_index += 1
                             iteration_count += 1
@@ -3845,8 +3845,11 @@ class WanVideoSampler:
                                     last_frame = original_images[:, :, -1:, :, :]
                                     miss_length   = 1
                                     original_images = torch.cat([original_images, last_frame.repeat(1, 1, miss_length, 1, 1)], dim=2)
-
-                        gen_video_samples = torch.cat(gen_video_list, dim=1)
+                        
+                        if not output_path:
+                            gen_video_samples = torch.cat(gen_video_list, dim=1)
+                        else:
+                            gen_video_samples = torch.zeros(3, 1, 64, 64) # dummy output
 
                         if force_offload:
                             if not model["auto_cpu_offload"]:
@@ -3856,7 +3859,7 @@ class WanVideoSampler:
                             torch.cuda.reset_peak_memory_stats(device)
                         except:
                             pass
-                        return {"video": gen_video_samples.permute(1, 2, 3, 0)},
+                        return {"video": gen_video_samples.permute(1, 2, 3, 0), "output_path": output_path},
                     # region framepack loop
                     elif framepack:
                         framepack_out = []
@@ -4283,7 +4286,10 @@ class WanVideoEncodeLatentBatch:
 
         latent_list = []
         for img in images:
-            latent = vae.encode(img.unsqueeze(0).unsqueeze(0).permute(0, 4, 1, 2, 3), device=device, tiled=enable_vae_tiling, tile_size=(tile_x//vae.upsampling_factor, tile_y//vae.upsampling_factor), tile_stride=(tile_stride_x//vae.upsampling_factor, tile_stride_y//vae.upsampling_factor))
+            if enable_vae_tiling and tile_x is not None:
+                latent = vae.encode(img.unsqueeze(0).unsqueeze(0).permute(0, 4, 1, 2, 3), device=device, tiled=enable_vae_tiling, tile_size=(tile_x//vae.upsampling_factor, tile_y//vae.upsampling_factor), tile_stride=(tile_stride_x//vae.upsampling_factor, tile_stride_y//vae.upsampling_factor))
+            else:
+                latent = vae.encode(img.unsqueeze(0).unsqueeze(0).permute(0, 4, 1, 2, 3), device=device, tiled=enable_vae_tiling)
             vae.model.clear_cache()
             if latent_strength != 1.0:
                 latent *= latent_strength
