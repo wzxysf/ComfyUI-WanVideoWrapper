@@ -2885,7 +2885,7 @@ class WanVideoSampler:
 
                         # HuMo
                         if humo_audio_input_neg is not None and not math.isclose(humo_audio_cfg_scale[idx], 1.0):
-                            if len(cache_state) !=3:
+                            if cache_state is not None and len(cache_state) != 3:
                                 cache_state.append(None)
                             if t > 980 and humo_image_cond_neg is not None: # use image cond for first timesteps
                                 base_params['y'] = [humo_image_cond_neg.to(z)]
