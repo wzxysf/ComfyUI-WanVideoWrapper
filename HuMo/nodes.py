@@ -9,7 +9,7 @@ from comfy.utils import load_torch_file
 import comfy.model_management as mm
 
 from accelerate import init_empty_weights
-from ..utils import set_module_tensor_to_device
+from ..utils import set_module_tensor_to_device, log
 from ..nodes import WanVideoEncodeLatentBatch
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
@@ -191,21 +191,25 @@ class HuMoEmbeds:
             audio_emb = torch.zeros(num_frames, 5, 1280, device=device)
             audio_len = num_frames
             
-        frame_num = num_frames if num_frames != -1 else audio_len
-        frame_num = 4 * ((frame_num - 1) // 4) + 1
-        audio_emb, _ = get_audio_emb_window(audio_emb, frame_num, frame0_idx=0)
+        pixel_frame_num = num_frames if num_frames != -1 else audio_len
+        pixel_frame_num = 4 * ((pixel_frame_num - 1) // 4) + 1
+        latent_frame_num = (pixel_frame_num - 1) // 4 + 1
+
+        log.info(f"HuMo set to generate {pixel_frame_num} frames")
+
+        audio_emb, _ = get_audio_emb_window(audio_emb, pixel_frame_num, frame0_idx=0)
 
         samples, = WanVideoEncodeLatentBatch.encode(self, vae, reference_images, False, 0, 0, 0, 0)
         samples = samples["samples"].transpose(0, 2).squeeze(0)
 
         C, T, H, W = samples.shape
 
-        target_shape = (16, (num_frames - 1) // 4 + 1 + T,
+        target_shape = (16, latent_frame_num + T,
                         H * 8 // 8,
                         W * 8 // 8)
 
         vae.to(device)
-        zero_frames = torch.zeros(1, 3, num_frames + 4*T, H * 8, W * 8, device=device, dtype=vae.dtype)
+        zero_frames = torch.zeros(1, 3, pixel_frame_num + 4*T, H * 8, W * 8, device=device, dtype=vae.dtype)
         zero_latents = vae.encode(zero_frames, device=device)[0].to(samples.device)
         vae.model.clear_cache()
         vae.to(offload_device)
@@ -228,7 +232,7 @@ class HuMoEmbeds:
             "humo_image_cond_neg": image_cond_neg,
             "humo_reference_count": T,
             "target_shape": target_shape,
-            "num_frames": num_frames,
+            "num_frames": pixel_frame_num,
             "humo_audio_scale": audio_scale,
             "humo_audio_cfg_scale": audio_cfg_scale,
             "humo_start_percent": audio_start_percent,
