@@ -55,7 +55,7 @@ class WhisperModelLoader:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": (folder_paths.get_filename_list("audio_encoders"), {"tooltip": "These models are loaded from the 'ComfyUI/models/wav2vec2' or 'ComfyUI/models/audio_encoders' folder",}),
+                "model": (folder_paths.get_filename_list("audio_encoders"), {"tooltip": "These models are loaded from the 'ComfyUI/models/audio_encoders' folder",}),
                 "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
                 "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
