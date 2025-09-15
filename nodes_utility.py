@@ -114,7 +114,15 @@ class WanVideoVACEStartToEndFrame:
     DESCRIPTION = "Helper node to create start/end frame batch and masks for VACE"
 
     def process(self, num_frames, empty_frame_level, start_image=None, end_image=None, control_images=None, inpaint_mask=None, start_index=0, end_index=-1):
-        
+
+        if start_image is None and end_image is None and control_images is not None:
+            if control_images.shape[0] >= num_frames:
+                control_images = control_images[:num_frames]
+            elif control_images.shape[0] < num_frames:
+                # padd with empty_frame_level frames
+                padding = torch.ones((num_frames - control_images.shape[0], control_images.shape[1], control_images.shape[2], control_images.shape[3]), device=control_images.device) * empty_frame_level
+                control_images = torch.cat([control_images, padding], dim=0)
+            return (control_images.cpu().float(), torch.zeros_like(control_images[:, :, :, 0]).cpu().float())
         B, H, W, C = start_image.shape if start_image is not None else end_image.shape
         device = start_image.device if start_image is not None else end_image.device
 
