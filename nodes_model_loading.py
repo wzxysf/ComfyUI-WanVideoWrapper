@@ -783,15 +783,18 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         for r in reader:
             all_tensors.extend(r.tensors)
         for tensor in all_tensors:
+            name = tensor.name
+            if "glob" not in name and "audio_proj" in name:
+                name = name.replace("audio_proj", "multitalk_audio_proj")
             load_device = device
-            if "vace_blocks." in tensor.name:
+            if "vace_blocks." in name:
                 try:
-                    vace_block_idx = int(tensor.name.split("vace_blocks.")[1].split(".")[0])
+                    vace_block_idx = int(name.split("vace_blocks.")[1].split(".")[0])
                 except Exception:
                     vace_block_idx = None
-            elif "blocks." in tensor.name:
+            elif "blocks." in name:
                 try:
-                    block_idx = int(tensor.name.split("blocks.")[1].split(".")[0])
+                    block_idx = int(name.split("blocks.")[1].split(".")[0])
                 except Exception:
                     block_idx = None
 
@@ -805,7 +808,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
                         
             is_gguf_quant = tensor.tensor_type not in [GGMLQuantizationType.F32, GGMLQuantizationType.F16]
             weights = torch.from_numpy(tensor.data.copy()).to(load_device)
-            sd[tensor.name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
+            sd[name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
         sd.update(extra_sd)
         del all_tensors, extra_sd
 
@@ -1298,16 +1301,21 @@ class WanVideoModelLoader:
                         class_interval=4,
                         attention_mode=attention_mode,
                     )
-            transformer.audio_proj = multitalk_model["proj_model"]
+            transformer.multitalk_audio_proj = multitalk_model["proj_model"]
             transformer.multitalk_model_type = multitalk_model_type
 
             extra_model_path = multitalk_model["model_path"]
+            extra_sd = {}
             if multitalk_model_path.endswith(".gguf"):
-                extra_sd, extra_reader = load_gguf(extra_model_path)
+                extra_sd_temp, extra_reader = load_gguf(extra_model_path)
                 gguf_reader.append(extra_reader)
                 del extra_reader
             else:
-                extra_sd = load_torch_file(extra_model_path, device=transformer_load_device, safe_load=True)
+                extra_sd_temp = load_torch_file(extra_model_path, device=transformer_load_device, safe_load=True)
+                
+            for k, v in extra_sd_temp.items():
+                extra_sd[k.replace("audio_proj.", "multitalk_audio_proj.")] = v
+                
             sd.update(extra_sd)
             del extra_sd
 
@@ -1391,9 +1399,6 @@ class WanVideoModelLoader:
                 raise NotImplementedError("fp8_fast is not supported with unmerged LoRAs")
             from .fp8_optimization import convert_fp8_linear
             convert_fp8_linear(transformer, base_dtype, params_to_keep, scale_weight_keys=scale_weights)
-
-        if multitalk_model is not None:
-            transformer.audio_proj = multitalk_model["proj_model"]
 
         if vram_management_args is not None:
             if gguf:

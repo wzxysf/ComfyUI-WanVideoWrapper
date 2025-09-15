@@ -204,7 +204,7 @@ class HuMoEmbeds:
 
         log.info(f"HuMo set to generate {pixel_frame_num} frames")
 
-        audio_emb, _ = get_audio_emb_window(audio_emb, pixel_frame_num, frame0_idx=0)
+        #audio_emb, _ = get_audio_emb_window(audio_emb, pixel_frame_num, frame0_idx=0)
 
         num_refs = 0
         if reference_images is not None:
@@ -229,8 +229,8 @@ class HuMoEmbeds:
         if reference_images is not None:
             mask[:,:-num_refs] = 0
             image_cond = torch.cat([zero_latents[:, :(target_shape[1]-num_refs)], samples], dim=1)
-            zero_audio_pad = torch.zeros(num_refs, *audio_emb.shape[1:]).to(audio_emb.device)
-            audio_emb = torch.cat([audio_emb, zero_audio_pad], dim=0)
+            #zero_audio_pad = torch.zeros(num_refs, *audio_emb.shape[1:]).to(audio_emb.device)
+            #audio_emb = torch.cat([audio_emb, zero_audio_pad], dim=0)
         else:
             image_cond = zero_latents
             mask = torch.zeros_like(mask)
@@ -252,14 +252,36 @@ class HuMoEmbeds:
         }
         
         return (embeds, )
+    
+class WanVideoCombineEmbeds:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "embeds_1": ("WANVIDIMAGE_EMBEDS",),
+                    "embeds_2": ("WANVIDIMAGE_EMBEDS",),
+                }
+        }
+
+    RETURN_TYPES = ("WANVIDIMAGE_EMBEDS",)
+    RETURN_NAMES = ("image_embeds",)
+    FUNCTION = "add"
+    CATEGORY = "WanVideoWrapper"
+    EXPERIMENTAL = True
+
+    def add(self, embeds_1, embeds_2):
+        # Combine the two sets of embeds
+        combined = {**embeds_1, **embeds_2}
+        return (combined,)
 
 
 NODE_CLASS_MAPPINGS = {
     "WhisperModelLoader": WhisperModelLoader,
     "HuMoEmbeds": HuMoEmbeds,
+    "WanVideoCombineEmbeds": WanVideoCombineEmbeds,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WhisperModelLoader": "Whisper Model Loader",
     "HuMoEmbeds": "HuMo Embeds",
+    "WanVideoCombineEmbeds": "WanVideo Combine Embeds",
 }
