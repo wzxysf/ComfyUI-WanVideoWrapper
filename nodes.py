@@ -2124,7 +2124,16 @@ class WanVideoSampler:
         humo_audio_scale = image_embeds.get("humo_audio_scale", 1.0)
         humo_image_cond = image_embeds.get("humo_image_cond", None)
         humo_image_cond_neg = image_embeds.get("humo_image_cond_neg", None)
-        
+
+        pos_latent = neg_latent = None
+
+        if transformer.dim == 1536 and humo_image_cond is not None: #small humo model
+            #noise = torch.cat([noise[:, :-humo_reference_count], humo_image_cond[4:, -humo_reference_count:]], dim=1)
+            pos_latent = humo_image_cond[4:, -humo_reference_count:].to(device, dtype)
+            neg_latent = torch.zeros_like(pos_latent)
+            seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
+            humo_image_cond = humo_image_cond_neg = None
+
         humo_audio_cfg_scale = image_embeds.get("humo_audio_cfg_scale", 1.0)
         humo_start_percent = image_embeds.get("humo_start_percent", 0.0)
         humo_end_percent = image_embeds.get("humo_end_percent", 1.0)
@@ -2871,6 +2880,8 @@ class WanVideoSampler:
                 try:
                     if not batched_cfg:
                         #conditional (positive) pass
+                        if pos_latent is not None: # for humo
+                            base_params['x'] = [torch.cat([z[:, :-humo_reference_count], pos_latent], dim=1)]
                         noise_pred_cond, cache_state_cond = transformer(
                             context=positive_embeds,
                             pred_id=cache_state[0] if cache_state else None,
@@ -2888,28 +2899,50 @@ class WanVideoSampler:
                         base_params['clip_fea'] = clip_fea_neg if clip_fea_neg is not None else clip_fea
                         if humo_audio_input_neg is not None:
                             base_params['humo_audio'] = humo_audio_input_neg
-                        
+                        if neg_latent is not None:
+                            base_params['x'] = [torch.cat([z[:, :-humo_reference_count], neg_latent], dim=1)]
+
                         noise_pred_uncond, cache_state_uncond = transformer(
-                            context=negative_embeds if humo_audio_input_neg is None else positive_embeds, #ti
+                            context=negative_embeds if humo_audio_input_neg is None else positive_embeds, #ti #t
                             pred_id=cache_state[1] if cache_state else None,
                             vace_data=vace_data, attn_cond=attn_cond_neg,
                             **base_params)
                         noise_pred_uncond = noise_pred_uncond[0]
 
                         # HuMo
-                        if humo_audio_input_neg is not None and not math.isclose(humo_audio_cfg_scale[idx], 1.0):
+                        if not math.isclose(humo_audio_cfg_scale[idx], 1.0):
                             if cache_state is not None and len(cache_state) != 3:
                                 cache_state.append(None)
-                            if t > 980 and humo_image_cond_neg_input is not None: # use image cond for first timesteps
-                                base_params['y'] = [humo_image_cond_neg_input]
-                            
-                            noise_pred_humo_audio_uncond, cache_state_humo = transformer(
-                            context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
-                            **base_params)
+                            if humo_image_cond is not None and humo_audio_input_neg is not None:
+                                if t > 980 and humo_image_cond_neg_input is not None: # use image cond for first timesteps
+                                    base_params['y'] = [humo_image_cond_neg_input]
+                                
+                                noise_pred_humo_audio_uncond, cache_state_humo = transformer(
+                                context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
+                                **base_params)
 
-                            noise_pred = (noise_pred_uncond + humo_audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_humo_audio_uncond[0]) 
-                                          + (cfg_scale - 2.0) * (noise_pred_humo_audio_uncond[0] - noise_pred_uncond))
-                            return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_humo]
+                                noise_pred = (noise_pred_uncond + humo_audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_humo_audio_uncond[0]) 
+                                            + (cfg_scale - 2.0) * (noise_pred_humo_audio_uncond[0] - noise_pred_uncond))
+                                return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_humo]
+                            elif humo_audio_input is not None:
+                                if cache_state is not None and len(cache_state) != 4:
+                                    cache_state.append(None)
+                                # audio
+                                noise_pred_humo_null, cache_state_humo = transformer(
+                                context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
+                                **base_params)
+                                # negative
+                                if humo_audio_input is not None:
+                                    base_params['humo_audio'] = humo_audio_input
+                                noise_pred_humo_audio, cache_state_humo2 = transformer(
+                                context=positive_embeds, pred_id=cache_state[3] if cache_state else None, vace_data=None,
+                                **base_params)
+                                noise_pred = (humo_audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_humo_audio[0])
+                                    + cfg_scale * (noise_pred_humo_audio[0] - noise_pred_uncond)
+                                    + cfg_scale * (noise_pred_uncond - noise_pred_humo_null[0])
+                                    + noise_pred_humo_null[0])
+                                return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_humo, cache_state_humo2]
+
                         #phantom
                         if use_phantom and not math.isclose(phantom_cfg_scale[idx], 1.0):
                             noise_pred_phantom, cache_state_phantom = transformer(
@@ -4131,7 +4164,7 @@ class WanVideoSampler:
                                 callback_latent = (latent_model_input[:, :orig_noise_len].to(device) - noise_pred[:, :orig_noise_len].to(device) * t.to(device) / 1000).detach()
                             #elif phantom_latents is not None:
                             #    callback_latent = (latent_model_input[:,:-phantom_latents.shape[1]].to(device) - noise_pred[:,:-phantom_latents.shape[1]].to(device) * t.to(device) / 1000).detach()
-                            elif humo_image_cond is not None and humo_reference_count > 0:
+                            elif humo_reference_count > 0:
                                 callback_latent = (latent_model_input[:,:-humo_reference_count].to(device) - noise_pred[:,:-humo_reference_count].to(device) * t.to(device) / 1000).detach()
                             else:
                                 callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach()
@@ -4153,7 +4186,7 @@ class WanVideoSampler:
 
         if phantom_latents is not None:
             latent = latent[:,:-phantom_latents.shape[1]]
-        if humo_image_cond is not None and humo_reference_count > 0:
+        if humo_reference_count > 0:
             latent = latent[:,:-humo_reference_count]
         
         cache_states = None
