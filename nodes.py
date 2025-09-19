@@ -1211,9 +1211,7 @@ class WanVideoAnimateEmbeds:
             else:
                 resized_face_images = face_images.permute(3, 0, 1, 2) # B, C, T, H, W
             resized_face_images = (resized_face_images * 2 - 1).unsqueeze(0)
-        else:
-            resized_face_images = torch.zeros(1, 3, num_frames, 512, 512, device=device, dtype=torch.float32)
-        resized_face_images = resized_face_images.to(offload_device, dtype=vae.dtype)
+            resized_face_images = resized_face_images.to(offload_device, dtype=vae.dtype)
 
         vae.model.clear_cache()
 
@@ -1233,7 +1231,7 @@ class WanVideoAnimateEmbeds:
             "ref_masks": ref_mask if mask is not None and looping else None,
             "ref_latent": ref_latent,
             "ref_image": resized_ref_images if ref_images is not None else None,
-            "face_pixels": resized_face_images,
+            "face_pixels": resized_face_images if face_images is not None else None,
             "num_frames": num_frames,
             "target_shape": target_shape,
             "frame_window_size": frame_window_size,
