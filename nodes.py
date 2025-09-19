@@ -4283,7 +4283,8 @@ class WanVideoSampler:
                         last_clip_num = (total_frames - overlap) % real_clip_len
                         extra = 0 if last_clip_num == 0 else real_clip_len - last_clip_num
                         target_len = total_frames + extra
-                        target_latent_len = (target_len - 1) // 4 + 2
+                        estimated_iterations = target_len // frame_window_size
+                        target_latent_len = (target_len - 1) // 4 + estimated_iterations
                         latent_window_size = (frame_window_size - 1) // 4 + 1
 
                         from .utils import tensor_pingpong_pad
@@ -4317,7 +4318,7 @@ class WanVideoSampler:
                         end = frame_window_size
                         end_latent = latent_window_size
 
-                        estimated_iterations = target_len // frame_window_size
+                        
                         callback = prepare_callback(patcher, estimated_iterations)
                         log.info(f"Sampling {total_frames} frames in {estimated_iterations} windows, at {latent.shape[3]*vae_upscale_factor}x{latent.shape[2]*vae_upscale_factor} with {steps} steps")
                         
