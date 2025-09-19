@@ -4294,9 +4294,7 @@ class WanVideoSampler:
                         bg_images = image_embeds.get("bg_images", None)
 
                         pose_input_latents = current_ref_images = face_images = None
-                        #if wananim_pose_latents is not None:
-                            #pose_input_latents = tensor_pingpong_pad(wananim_pose_latents, target_latent_len)
-                            #log.info(f"WanAnimate: Pose input {wananim_pose_latents.shape} padded to shape {pose_input_latents.shape}")
+
                         if wananim_face_pixels is not None:
                             face_images = tensor_pingpong_pad(wananim_face_pixels, target_len)
                             log.info(f"WanAnimate: Face input {wananim_face_pixels.shape} padded to shape {face_images.shape}")
@@ -4306,11 +4304,6 @@ class WanVideoSampler:
                         if bg_images is not None:
                             bg_images_in = tensor_pingpong_pad(bg_images, target_len)
                             log.info(f"WanAnimate: BG images {bg_images.shape} padded to shape {bg_images.shape}")
-
-                        # if replace_flag:
-                        #     bg_images, mask_images = self.prepare_source_for_replace(src_bg_path, src_mask_path)
-                        #     bg_images = inputs_padding(bg_images, target_len)
-                        #     mask_images = inputs_padding(mask_images, target_len)
 
                         # init variables
                         offloaded = False
@@ -4344,11 +4337,6 @@ class WanVideoSampler:
                                 vae.to(device)
                                 if ref_masks is not None:
                                     msk = ref_masks_in[:, start_latent:end_latent].to(device, dtype)
-                                    # if msk.shape[1] < latent_window_size:
-                                    #     log.info(f"WanAnimate: Padding ref masks from {msk.shape} to length {latent_window_size}")
-                                    #     pad_length = latent_window_size - msk.shape[1]
-                                    #     last_frame = msk[:, -1:].repeat(1, pad_length, 1, 1)
-                                    #     msk = torch.cat([msk, last_frame], dim=1)
                                 else:
                                     msk = torch.zeros(4, latent_window_size, lat_h, lat_w, device=device, dtype=dtype)
                                 if bg_images is not None:

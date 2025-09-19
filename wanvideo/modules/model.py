@@ -2242,7 +2242,6 @@ class WanModel(torch.nn.Module):
             ip_img_ids[:, :, :, 2] = ip_img_ids[:, :, :, 2] + torch.linspace(w_len + freq_offset, w_len + freq_offset + w_ip - 1, steps=w_ip, device=x.device, dtype=x.dtype).reshape(1, 1, -1)
             ip_img_ids = repeat(ip_img_ids, "t h w c -> b (t h w) c", b=1)
             freqs_ip = self.rope_embedder(ip_img_ids).movedim(1, 2)
-            #print("freqs_ip shape:", freqs_ip.shape)
 
         # EchoShot cross attn freqs
         inner_c = None
@@ -2255,9 +2254,6 @@ class WanModel(torch.nn.Module):
             motion_encoded = motion_encoded + cond_mask_weight[2]
             x = torch.cat([x, motion_encoded], dim=1)
             freqs = torch.cat([freqs, freqs_motion], dim=1)
-
-            #t = torch.repeat_interleave(t, 2, dim=1)
-            #t = torch.cat([t, torch.zeros((t.shape[0], 3), device=t.device, dtype=t.dtype)], dim=1)
 
         # time embeddings
         if t.dim() == 2:

@@ -792,7 +792,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
                     vace_block_idx = int(name.split("vace_blocks.")[1].split(".")[0])
                 except Exception:
                     vace_block_idx = None
-            elif "blocks." in name:
+            elif "blocks." in name and "face" not in name:
                 try:
                     block_idx = int(name.split("blocks.")[1].split(".")[0])
                 except Exception:
@@ -831,7 +831,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
                 vace_block_idx = int(name.split("vace_blocks.")[1].split(".")[0])
             except Exception:
                 vace_block_idx = None
-        elif "blocks." in name:
+        elif "blocks." in name and "face" not in name:
             try:
                 block_idx = int(name.split("blocks.")[1].split(".")[0])
             except Exception:
@@ -868,6 +868,8 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
+    #for name, param in transformer.named_parameters():
+    #    print(name, param.device, param.dtype)
 
     pbar.update_absolute(0)
 
