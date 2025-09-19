@@ -1118,6 +1118,9 @@ class WanVideoAnimateEmbeds:
 
         looping = num_frames > frame_window_size
 
+        if num_frames < frame_window_size:
+            frame_window_size = num_frames
+
         target_shape = (16, (num_frames - 1) // 4 + 1 + num_refs, lat_h, lat_w)
         latent_window_size = ((frame_window_size - 1) // 4)
 
