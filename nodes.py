@@ -3115,6 +3115,8 @@ class WanVideoSampler:
                         #unconditional (negative) pass
                         base_params['is_uncond'] = True
                         base_params['clip_fea'] = clip_fea_neg if clip_fea_neg is not None else clip_fea
+                        if wananim_face_pixels is not None:
+                            base_params['wananim_face_pixel_values'] = torch.zeros_like(wananim_face_pixels).to(device, torch.float32) - 1
                         if humo_audio_input_neg is not None:
                             base_params['humo_audio'] = humo_audio_input_neg
                         if neg_latent is not None:
