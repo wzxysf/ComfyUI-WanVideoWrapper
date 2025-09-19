@@ -1906,7 +1906,9 @@ class WanModel(torch.nn.Module):
     def wananimate_forward(self, block_idx, x, motion_vec, strength=1.0, motion_masks=None):
         if block_idx % 5 == 0:
             adapter_args = [x, motion_vec, motion_masks]
+            self.face_adapter.to(self.main_device)
             residual_out = self.face_adapter.fuser_blocks[block_idx // 5](*adapter_args)
+            self.face_adapter.to(self.offload_device)
             return x.add(residual_out, alpha=strength)
         return x
 
