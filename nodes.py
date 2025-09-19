@@ -1116,14 +1116,17 @@ class WanVideoAnimateEmbeds:
         lat_w = W // vae.upsampling_factor
 
         num_refs = ref_images.shape[0] if ref_images is not None else 0
-
         num_frames = ((num_frames - 1) // 4) * 4 + 1
-        target_shape = (16, (num_frames - 1) // 4 + 1 + num_refs, lat_h, lat_w)
-        latent_window_size = ((frame_window_size - 1) // 4) + 1
 
         looping = num_frames > frame_window_size
+
+        target_shape = (16, (num_frames - 1) // 4 + 1 + num_refs, lat_h, lat_w)
+        latent_window_size = ((frame_window_size - 1) // 4)
+
         if not looping:
             num_frames = num_frames + num_refs * 4
+        else:
+            latent_window_size = latent_window_size + 1
 
         vae.to(device)
         # Resize and rearrange the input image dimensions
@@ -1184,6 +1187,8 @@ class WanVideoAnimateEmbeds:
                 ref_mask = torch.zeros(1, num_frames, lat_h, lat_w, device=device, dtype=vae.dtype)
             else:
                 ref_mask = 1 - mask[:num_frames]
+                if ref_mask.shape[0] < num_frames and not looping:
+                    ref_mask = torch.cat([ref_mask, ref_mask[-1:].repeat(num_frames - ref_mask.shape[0], 1, 1)], dim=0)
                 ref_mask = common_upscale(ref_mask.unsqueeze(1), lat_w, lat_h, "nearest", "disabled").squeeze(1)
                 ref_mask = ref_mask.to(vae.dtype).to(device)
                 ref_mask = ref_mask.unsqueeze(-1).permute(3, 0, 1, 2) # C, T, H, W
