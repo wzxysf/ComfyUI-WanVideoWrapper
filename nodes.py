@@ -2383,6 +2383,7 @@ class WanVideoSampler:
         wananim_face_pixels = image_embeds.get("face_pixels", None)
         if image_cond is None:
             image_cond = image_embeds.get("ref_latent", None)
+            has_ref = image_cond is not None
 
         latent_video_length = noise.shape[1]
 
@@ -4669,8 +4670,6 @@ class WanVideoSampler:
             latent = latent[:,:-phantom_latents.shape[1]]
         if humo_reference_count > 0:
             latent = latent[:,:-humo_reference_count]
-        if wananim_pose_latents is not None:
-            latent = latent[:, 1:]
         
         cache_states = None
         if cache_args is not None:
