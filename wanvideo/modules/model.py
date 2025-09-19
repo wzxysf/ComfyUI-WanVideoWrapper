@@ -1906,9 +1906,7 @@ class WanModel(torch.nn.Module):
     def wananimate_forward(self, block_idx, x, motion_vec, strength=1.0, motion_masks=None):
         if block_idx % 5 == 0:
             adapter_args = [x, motion_vec, motion_masks]
-            self.face_adapter.to(self.main_device)
             residual_out = self.face_adapter.fuser_blocks[block_idx // 5](*adapter_args)
-            self.face_adapter.to(self.offload_device)
             return x.add(residual_out, alpha=strength)
         return x
 
@@ -1986,7 +1984,7 @@ class WanModel(torch.nn.Module):
         fun_camera=None,
         audio_proj=None,
         audio_scale=1.0,
-        pcd_data=None,
+        uni3c_data=None,
         controlnet=None,
         add_cond=None,
         attn_cond=None,
@@ -2092,8 +2090,8 @@ class WanModel(torch.nn.Module):
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
         
         #uni3c controlnet
-        if pcd_data is not None:
-            render_latent = pcd_data["render_latent"].to(x[0].dtype)
+        if uni3c_data is not None:
+            render_latent = uni3c_data["render_latent"].to(x[0].dtype)
             hidden_states = x[0].unsqueeze(0).clone().float()
             if hidden_states.shape[1] == 16: #T2V work around
                 hidden_states = torch.cat([hidden_states, torch.zeros_like(hidden_states[:, :4])], dim=1)
@@ -2572,16 +2570,16 @@ class WanModel(torch.nn.Module):
                 kwargs['vace_context_scale'] = vace_scale_list
 
             #uni3c controlnet
-            pdc_controlnet_states = None
-            if pcd_data is not None:
-                if (pcd_data["start"] <= current_step_percentage <= pcd_data["end"]) or \
-                            (pcd_data["end"] > 0 and current_step == 0 and current_step_percentage >= pcd_data["start"]):
+            uni3c_controlnet_states = None
+            if uni3c_data is not None:
+                if (uni3c_data["start"] <= current_step_percentage <= uni3c_data["end"]) or \
+                            (uni3c_data["end"] > 0 and current_step == 0 and current_step_percentage >= uni3c_data["start"]):
                     self.controlnet.to(self.main_device)
                     with torch.autocast(device_type=mm.get_autocast_device(device), dtype=x.dtype, enabled=True):
-                        pdc_controlnet_states = self.controlnet(
+                        uni3c_controlnet_states = self.controlnet(
                             render_latent=render_latent.to(self.main_device, self.controlnet.dtype), 
-                            render_mask=pcd_data["render_mask"], 
-                            camera_embedding=pcd_data["camera_embedding"], 
+                            render_mask=uni3c_data["render_mask"], 
+                            camera_embedding=uni3c_data["camera_embedding"], 
                             temb=e.to(self.main_device),
                             device=self.offload_device)
                     self.controlnet.to(self.offload_device)
@@ -2641,8 +2639,8 @@ class WanModel(torch.nn.Module):
                     log.info(f"Block {b}: transfer_time={transfer_time:.4f}s, compute_time={compute_time:.4f}s, to_cpu_transfer_time={to_cpu_transfer_time:.4f}s")
 
                 #uni3c controlnet
-                if pdc_controlnet_states is not None and b < len(pdc_controlnet_states):
-                    x[:, :self.original_seq_len] += pdc_controlnet_states[b].to(x) * pcd_data["controlnet_weight"]
+                if uni3c_controlnet_states is not None and b < len(uni3c_controlnet_states):
+                    x[:, :self.original_seq_len] += uni3c_controlnet_states[b].to(x) * uni3c_data["controlnet_weight"]
                 #controlnet
                 if (controlnet is not None) and (b % controlnet["controlnet_stride"] == 0) and (b // controlnet["controlnet_stride"] < len(controlnet["controlnet_states"])):
                     x[:, :self.original_seq_len] += controlnet["controlnet_states"][b // controlnet["controlnet_stride"]].to(x) * controlnet["controlnet_weight"]
