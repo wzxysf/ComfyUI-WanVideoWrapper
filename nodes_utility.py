@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from comfy.utils import common_upscale
 from .utils import log
+from einops import rearrange
 
 try:
     from server import PromptServer
@@ -476,6 +477,73 @@ class WanVideoPassImagesFromSamples:
         video.clamp_(-1.0, 1.0)
         video.add_(1.0).div_(2.0)
         return video.cpu().float(), samples.get("output_path", "")
+
+
+class FaceMaskFromPoseKeypoints:
+    @classmethod
+    def INPUT_TYPES(s):
+        input_types = {
+            "required": {
+                "pose_kps": ("POSE_KEYPOINT",),
+                "person_index": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1, "tooltip": "Index of the person to start with"}),
+            }
+        }
+        return input_types
+    RETURN_TYPES = ("MASK",)
+    FUNCTION = "createmask"
+    CATEGORY = "ControlNet Preprocessors/Pose Keypoint Postprocess"
+
+    def createmask(self, pose_kps, person_index):
+        pose_frames = pose_kps
+        prev_center = None
+        np_frames = []
+        for i, pose_frame in enumerate(pose_frames):
+            selected_idx, prev_center = self.select_closest_person(pose_frame, person_index if i == 0 else prev_center)
+            np_frames.append(self.draw_kps(pose_frame, selected_idx))
+        np_frames = np.stack(np_frames, axis=0)
+        tensor = torch.from_numpy(np_frames).float() / 255.
+        print("tensor.shape:", tensor.shape)
+        tensor = tensor[:, :, :, 0]
+        return (tensor,)
+
+    def select_closest_person(self, pose_frame, prev_center_or_index):
+        people = pose_frame["people"]
+        if not people:
+            return -1, None
+        centers = []
+        for person in people:
+            kps = np.array(person["face_keypoints_2d"])
+            n = len(kps) // 3
+            facial_kps = rearrange(kps, "(n c) -> n c", n=n, c=3)[:, :2]
+            center = facial_kps.mean(axis=0)
+            centers.append(center)
+        if isinstance(prev_center_or_index, (int, np.integer)):
+            # First frame: use person_index
+            idx = prev_center_or_index if 0 <= prev_center_or_index < len(people) else 0
+            return idx, centers[idx]
+        else:
+            # Find closest to previous center
+            prev_center = np.array(prev_center_or_index)
+            dists = [np.linalg.norm(center - prev_center) for center in centers]
+            idx = int(np.argmin(dists))
+            return idx, centers[idx]
+
+    def draw_kps(self, pose_frame, person_index):
+        import cv2
+        width, height = pose_frame["canvas_width"], pose_frame["canvas_height"]
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        people = pose_frame["people"]
+        if person_index < 0 or person_index >= len(people):
+            return canvas  # Out of bounds, return blank
+        person = people[person_index]
+        n = len(person["face_keypoints_2d"]) // 3
+        facial_kps = rearrange(np.array(person["face_keypoints_2d"]), "(n c) -> n c", n=n, c=3)[:, :2]
+        facial_kps = facial_kps.astype(np.int32)
+        part_color = (255, 255, 255)
+      
+        outer_contour = facial_kps[:17]
+        cv2.fillPoly(canvas, pts=[outer_contour], color=part_color)
+        return canvas
     
 NODE_CLASS_MAPPINGS = {
     "WanVideoImageResizeToClosest": WanVideoImageResizeToClosest,
@@ -488,6 +556,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoSigmaToStep": WanVideoSigmaToStep,
     "NormalizeAudioLoudness": NormalizeAudioLoudness,
     "WanVideoPassImagesFromSamples": WanVideoPassImagesFromSamples,
+    "FaceMaskFromPoseKeypoints": FaceMaskFromPoseKeypoints,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoImageResizeToClosest": "WanVideo Image Resize To Closest",
@@ -500,4 +569,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoSigmaToStep": "WanVideo Sigma To Step",
     "NormalizeAudioLoudness": "Normalize Audio Loudness",
     "WanVideoPassImagesFromSamples": "WanVideo Pass Images From Samples",
+    "FaceMaskFromPoseKeypoints": "Face Mask From Pose Keypoints",
 }

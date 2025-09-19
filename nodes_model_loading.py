@@ -761,7 +761,7 @@ class WanVideoSetLoRAs:
 def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
                  transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
     params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", 
-                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob"}
+                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob", "motion_encoder"}
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     cnt = 0
@@ -851,7 +851,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
             if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
                 dtype_to_use = base_dtype
-            if "patch_embedding" in name:
+            if "patch_embedding" in name or "motion_encoder" in name or "face_encoder" in name:
                 dtype_to_use = torch.float32
 
         load_device = transformer_load_device
@@ -1116,6 +1116,7 @@ class WanVideoModelLoader:
         ffn2_dim = sd["blocks.0.ffn.2.weight"].shape[1]
 
         is_humo = "audio_proj.audio_proj_glob_1.layer.weight" in sd
+        is_wananimate = "pose_patch_embedding.weight" in sd
 
         model_type = "t2v"
         if "audio_injector.injector.0.k.weight" in sd:
@@ -1219,6 +1220,7 @@ class WanVideoModelLoader:
             "rope_func": "comfy",
             "main_device": device,
             "offload_device": offload_device,
+            "dtype": base_dtype,
             "teacache_coefficients": teacache_coefficients_map[model_variant],
             "magcache_ratios": magcache_ratios_map[model_variant],
             "vace_layers": vace_layers,
@@ -1232,6 +1234,7 @@ class WanVideoModelLoader:
             "cond_dim": sd["cond_encoder.weight"].shape[1] if "cond_encoder.weight" in sd else 0,
             "zero_timestep": model_type == "s2v",
             "humo_audio": is_humo,
+            "is_wananimate": is_wananimate,
 
         }
 

@@ -584,7 +584,7 @@ class LoRALinearLayer(nn.Module):
         down_hidden_states = self.down(hidden_states.to(dtype))
         up_hidden_states = self.up(down_hidden_states) * self.strength
         return up_hidden_states.to(orig_dtype)
-                        
+
 #region crossattn
 class WanT2VCrossAttention(WanSelfAttention):
 
@@ -1445,6 +1445,7 @@ class WanModel(torch.nn.Module):
                 rope_func='comfy',
                 main_device=torch.device('cuda'),
                 offload_device=torch.device('cpu'),
+                dtype=torch.float16,
                 teacache_coefficients=[],
                 magcache_ratios=[],
                 vace_layers=None,
@@ -1464,6 +1465,9 @@ class WanModel(torch.nn.Module):
                 audio_inject_layers=[0, 4, 8, 12, 16, 20, 24, 27, 30, 33, 36, 39],
                 zero_timestep=False,
                 humo_audio=False,
+                # WanAnimate
+                is_wananimate=False,
+                motion_encoder_dim=512,
                 ):
         r"""
         Initialize the diffusion model backbone.
@@ -1574,6 +1578,8 @@ class WanModel(torch.nn.Module):
         self.multitalk_model_type = "none"
 
         self.humo_audio = humo_audio
+
+        self.motion_encoder_dim = motion_encoder_dim
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -1714,7 +1720,23 @@ class WanModel(torch.nn.Module):
             from ...HuMo.audio_proj import AudioProjModel
             self.audio_proj = AudioProjModel(seq_len=8, blocks=5, channels=1280, 
                 intermediate_dim=512, output_dim=1536, context_tokens=16)
-
+        # WanAnimate
+        self.motion_encoder = self.pose_patch_embedding = self.face_encoder = self.face_adapter = None
+        if is_wananimate:
+            from .wananimate.motion_encoder import MotionExtractor
+            from .wananimate.face_blocks import FaceEncoder, FaceAdapter
+            self.pose_patch_embedding = nn.Conv3d(16, dim, kernel_size=patch_size, stride=patch_size)
+            self.motion_encoder = MotionExtractor()
+            self.face_adapter = FaceAdapter(
+                num_heads=self.num_heads,
+                feature_dim=self.dim,
+                num_adapter_layers=self.num_layers // 5,
+            )
+            self.face_encoder = FaceEncoder(
+                in_dim=motion_encoder_dim,
+                out_dim=self.dim,
+                num_heads=4,
+            )
 
     def block_swap(self, blocks_to_swap, offload_txt_emb=False, offload_img_emb=False, vace_blocks_to_swap=None, prefetch_blocks=0, block_swap_debug=False):
         # Clamp blocks_to_swap to valid range
@@ -1850,6 +1872,44 @@ class WanModel(torch.nn.Module):
 
         return x
 
+    def wananimate_pose_embedding(self, x, pose_latents, strength=1.0):
+        pose_latents = [self.pose_patch_embedding(u.unsqueeze(0).to(torch.float32)).to(x[0].dtype) for u in pose_latents]
+        for x_, pose_latents_ in zip(x, pose_latents):
+            x_[:, :, 1:].add_(pose_latents_, alpha=strength)
+        return x
+
+
+    def wananimate_face_embedding(self, face_pixel_values):
+        b,c,T,h,w = face_pixel_values.shape
+        face_pixel_values = rearrange(face_pixel_values, "b c t h w -> (b t) c h w")
+
+        encode_bs = 8
+        face_pixel_values_tmp = []
+        self.motion_encoder.to(self.main_device)
+        for i in range(math.ceil(face_pixel_values.shape[0]/encode_bs)):
+            face_pixel_values_tmp.append(self.motion_encoder(face_pixel_values[i*encode_bs:(i+1)*encode_bs]))
+        del face_pixel_values
+        self.motion_encoder.to(self.offload_device)
+
+        motion_vec = rearrange(torch.cat(face_pixel_values_tmp), "(b t) c -> b t c", t=T)
+        del face_pixel_values_tmp
+        self.face_encoder.to(self.main_device)
+        motion_vec = self.face_encoder(motion_vec)
+        self.face_encoder.to(self.offload_device)
+
+        B, L, H, C = motion_vec.shape
+        pad_face = torch.zeros(B, 1, H, C, device=motion_vec.device, dtype=motion_vec.dtype)
+        return torch.cat([pad_face, motion_vec], dim=1)
+
+
+    def wananimate_forward(self, block_idx, x, motion_vec, strength=1.0, motion_masks=None):
+        if block_idx % 5 == 0:
+            adapter_args = [x, motion_vec, motion_masks]
+            residual_out = self.face_adapter.fuser_blocks[block_idx // 5](*adapter_args)
+            return x.add(residual_out, alpha=strength)
+        return x
+
+
     def rope_encode_comfy(self, t, h, w, freq_offset=0, t_start=0, attn_cond_shape=None, steps_t=None, steps_h=None, steps_w=None, ntk_alphas=[1,1,1], device=None, dtype=None):
         patch_size = self.patch_size
         t_len = ((t + (patch_size[0] // 2)) // patch_size[0])
@@ -1949,6 +2009,10 @@ class WanModel(torch.nn.Module):
         s2v_motion_frames=[1, 0],
         humo_audio=None,
         humo_audio_scale=1.0,
+        wananim_pose_latents=None, 
+        wananim_face_pixel_values=None,
+        wananim_pose_strength=1.0,
+        wananim_face_strength=1.0,
 
     ):
         r"""
@@ -2045,10 +2109,20 @@ class WanModel(torch.nn.Module):
             self.original_patch_embedding(u.unsqueeze(0).to(torch.float32)).to(x[0].dtype)
             for u in x
             ]
-        
+
+        # WanAnimate
+        motion_vec = None
+        if wananim_face_pixel_values is not None:
+            motion_vec = self.wananimate_face_embedding(wananim_face_pixel_values).to(x[0].dtype)
+
+        if wananim_pose_latents is not None:
+            x = self.wananimate_pose_embedding(x, wananim_pose_latents, strength=wananim_pose_strength)
+
+        # s2v pose embedding
         if s2v_pose is not None:
             x[0] = x[0] + self.cond_encoder(s2v_pose.to(self.cond_encoder.weight.dtype)).to(x[0].dtype)
 
+        # Fun camera
         if self.control_adapter is not None and fun_camera is not None:
             fun_camera = self.control_adapter(fun_camera)
             x = [u + v for u, v in zip(x, fun_camera)]
@@ -2550,6 +2624,8 @@ class WanModel(torch.nn.Module):
                 x, x_ip = block(x, x_ip=x_ip, **kwargs) #run block
                 if self.audio_injector is not None and s2v_audio_input is not None:
                     x = self.audio_injector_forward(b, x, merged_audio_emb, scale=s2v_audio_scale) #s2v
+                if self.motion_encoder is not None and motion_vec is not None:
+                    x = self.wananimate_forward(b, x, motion_vec, strength=wananim_face_strength)
                 if self.block_swap_debug:
                     compute_end = time.perf_counter()
                     compute_time = compute_end - compute_start
