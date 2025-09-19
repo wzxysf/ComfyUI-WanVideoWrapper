@@ -738,7 +738,7 @@
         "Node name for S&R": "Sam2Segmentation"
       },
       "widgets_values": [
-        true,
+        false,
         false
       ]
     },
