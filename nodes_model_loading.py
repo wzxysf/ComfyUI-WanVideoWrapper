@@ -761,7 +761,7 @@ class WanVideoSetLoRAs:
 def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
                  transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
     params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", 
-                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob", "motion_encoder"}
+                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob", "face_encoder"}
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     cnt = 0
@@ -845,13 +845,13 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             continue
 
         if gguf:
-            dtype_to_use = torch.float32 if "patch_embedding" in name else base_dtype
+            dtype_to_use = torch.float32 if "patch_embedding" in name or "motion_encoder" in name else base_dtype
         else:
             dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
             dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
             if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
                 dtype_to_use = base_dtype
-            if "patch_embedding" in name or "motion_encoder" in name or "face_encoder" in name:
+            if "patch_embedding" in name or "motion_encoder" in name:
                 dtype_to_use = torch.float32
 
         load_device = transformer_load_device

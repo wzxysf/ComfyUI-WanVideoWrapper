@@ -22,6 +22,8 @@ class CausalConv1d(nn.Module):
 class FaceEncoder(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, num_heads: int, dtype=None, device=None):
         super().__init__()
+        self.dtype = dtype
+        self.device = device
 
         self.num_heads = num_heads
         self.conv1_local = CausalConv1d(in_dim, 1024 * num_heads, 3, stride=1)

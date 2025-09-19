@@ -1736,6 +1736,7 @@ class WanModel(torch.nn.Module):
                 in_dim=motion_encoder_dim,
                 out_dim=self.dim,
                 num_heads=4,
+                dtype=dtype
             )
 
     def block_swap(self, blocks_to_swap, offload_txt_emb=False, offload_img_emb=False, vace_blocks_to_swap=None, prefetch_blocks=0, block_swap_debug=False):
@@ -1894,7 +1895,7 @@ class WanModel(torch.nn.Module):
         motion_vec = rearrange(torch.cat(face_pixel_values_tmp), "(b t) c -> b t c", t=T)
         del face_pixel_values_tmp
         self.face_encoder.to(self.main_device)
-        motion_vec = self.face_encoder(motion_vec)
+        motion_vec = self.face_encoder(motion_vec.to(self.face_encoder.dtype))
         self.face_encoder.to(self.offload_device)
 
         B, L, H, C = motion_vec.shape
