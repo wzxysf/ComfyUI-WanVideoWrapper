@@ -85,9 +85,7 @@ def init_blockswap(transformer, block_swap_args, model):
     if not transformer.patched_linear:
         if block_swap_args is not None:
             for name, param in transformer.named_parameters():
-                if "block" not in name:
-                    param.data = param.data.to(device)
-                if "control_adapter" in name:
+                if "block" not in name or "control_adapter" in name or "face" in name:
                     param.data = param.data.to(device)
                 elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
                     param.data = param.data.to(offload_device)
@@ -1139,6 +1137,8 @@ class WanVideoAnimateEmbeds:
                 resized_pose_images = pose_images.permute(3, 0, 1, 2) # C, T, H, W
             resized_pose_images = resized_pose_images * 2 - 1
             pose_latents = vae.encode([resized_pose_images.to(device, vae.dtype)], device,tiled=tiled_vae)
+            pose_latents = pose_latents.to(offload_device)
+            vae.model.clear_cache()
             if not looping and pose_latents.shape[2] < latent_window_size:
                 log.info(f"WanAnimate: Padding pose latents from {pose_latents.shape} to length {latent_window_size}")
                 pad_len = latent_window_size - pose_latents.shape[2]
@@ -1156,6 +1156,8 @@ class WanVideoAnimateEmbeds:
             resized_bg_images = resized_bg_images[:3] * 2 - 1
             if not looping:
                 bg_latents = vae.encode([resized_bg_images.to(device, vae.dtype)], device,tiled=tiled_vae)[0]
+                bg_latents = bg_latents.to(offload_device)
+                vae.model.clear_cache()
                 print("bg_latents", bg_latents.shape)
                 del resized_bg_images
             else:
@@ -1173,24 +1175,26 @@ class WanVideoAnimateEmbeds:
                 msk = torch.zeros(4, 1, lat_h, lat_w, device=device, dtype=vae.dtype)
                 msk[:, :1] = 1
                 ref_latent_masked = torch.cat([msk, ref_latent], dim=0) # 4+C 1 H W
-                msk = torch.zeros(4, (frame_window_size - 1) // 4 + 1, lat_h, lat_w, device=device, dtype=vae.dtype)
+                ref_latent_masked = ref_latent_masked.to(offload_device)
 
             if bg_images is None:
                 zero_frames = torch.zeros(3, num_frames - num_refs, H, W, device=device, dtype=vae.dtype)
                 concatenated = torch.cat([resized_ref_images.to(device, dtype=vae.dtype), zero_frames], dim=1)
                 del zero_frames
                 ref_latent = vae.encode([concatenated.to(device, vae.dtype)], device,tiled=tiled_vae)[0]
+                ref_latent = ref_latent.to(offload_device)
                 del concatenated
-                print("ref_latent", ref_latent.shape)
+
+            vae.model.clear_cache()
 
             if mask is None:
-                ref_mask = torch.zeros(1, num_frames, lat_h, lat_w, device=device, dtype=vae.dtype)
+                ref_mask = torch.zeros(1, num_frames, lat_h, lat_w, device=offload_device, dtype=vae.dtype)
             else:
                 ref_mask = 1 - mask[:num_frames]
                 if ref_mask.shape[0] < num_frames and not looping:
                     ref_mask = torch.cat([ref_mask, ref_mask[-1:].repeat(num_frames - ref_mask.shape[0], 1, 1)], dim=0)
                 ref_mask = common_upscale(ref_mask.unsqueeze(1), lat_w, lat_h, "nearest", "disabled").squeeze(1)
-                ref_mask = ref_mask.to(vae.dtype).to(device)
+                ref_mask = ref_mask.to(vae.dtype).to(offload_device)
                 ref_mask = ref_mask.unsqueeze(-1).permute(3, 0, 1, 2) # C, T, H, W
             
             if bg_images is None:
@@ -1202,7 +1206,7 @@ class WanVideoAnimateEmbeds:
 
             if not looping:
                 if bg_images is not None:
-                    bg_latents_masked = torch.cat([ref_mask, bg_latents], dim=0)
+                    bg_latents_masked = torch.cat([ref_mask[:, :bg_latents.shape[1]], bg_latents], dim=0)
                     ref_latent = torch.cat([ref_latent_masked, bg_latents_masked], dim=1)
                 else:
                     ref_latent = torch.cat([ref_mask, ref_latent], dim=0)
@@ -2368,6 +2372,8 @@ class WanVideoSampler:
         # WanAnim inputs
         frame_window_size = image_embeds.get("frame_window_size", 77)
         wananimate_loop = image_embeds.get("looping", False)
+        if wananimate_loop and context_options is not None:
+            raise Exception("context_options are not compatible or necessary with WanAnim looping, since it creates the video in a loop.")
         wananim_pose_latents = image_embeds.get("pose_latents", None)
         wananim_pose_strength = image_embeds.get("pose_strength", 1.0)
         wananim_face_strength = image_embeds.get("face_strength", 1.0)
@@ -4336,17 +4342,13 @@ class WanVideoSampler:
                           
                             if ref_latent is not None:
                                 vae.to(device)
-                                #ref_latents = vae.encode([ref_images.to(device, vae.dtype)], device,tiled=tiled_vae)[0]
-                                #msk = torch.zeros(4, 1, lat_h, lat_w, device=device, dtype=dtype)
-                                #msk[:, :1] = 1
-                                #ref_latents = torch.cat([msk, ref_latents], dim=0) # 4+C 1 H W
                                 if ref_masks is not None:
                                     msk = ref_masks_in[:, start_latent:end_latent].to(device, dtype)
-                                    if msk.shape[1] < latent_window_size:
-                                        log.info(f"WanAnimate: Padding ref masks from {msk.shape} to length {latent_window_size}")
-                                        pad_length = latent_window_size - msk.shape[1]
-                                        last_frame = msk[:, -1:].repeat(1, pad_length, 1, 1)
-                                        msk = torch.cat([msk, last_frame], dim=1)
+                                    # if msk.shape[1] < latent_window_size:
+                                    #     log.info(f"WanAnimate: Padding ref masks from {msk.shape} to length {latent_window_size}")
+                                    #     pad_length = latent_window_size - msk.shape[1]
+                                    #     last_frame = msk[:, -1:].repeat(1, pad_length, 1, 1)
+                                    #     msk = torch.cat([msk, last_frame], dim=1)
                                 else:
                                     msk = torch.zeros(4, latent_window_size, lat_h, lat_w, device=device, dtype=dtype)
                                 if bg_images is not None:
@@ -4360,11 +4362,21 @@ class WanVideoSampler:
                                     temporal_ref_latents = vae.encode([concatenated.to(device, vae.dtype)], device,tiled=tiled_vae)[0]
                                     msk[:, :mask_reft_len] = 1
 
+                                if msk.shape[1] != temporal_ref_latents.shape[1]:
+                                    if temporal_ref_latents.shape[1] < msk.shape[1]:
+                                        pad_len = msk.shape[1] - temporal_ref_latents.shape[1]
+                                        pad_tensor = temporal_ref_latents[:, -1:].repeat(1, pad_len, 1, 1)
+                                        temporal_ref_latents = torch.cat([temporal_ref_latents, pad_tensor], dim=1)
+                                    else:
+                                        temporal_ref_latents = temporal_ref_latents[:, :msk.shape[1]]
+
                                 vae.model.clear_cache()
                                 vae.to(offload_device)
+                                mm.soft_empty_cache()
+                                gc.collect()
                                 
                                 temporal_ref_latents = torch.cat([msk, temporal_ref_latents], dim=0) # 4+C T H W
-                                image_cond_in = torch.cat([ref_latent, temporal_ref_latents], dim=1) # 4+C T+trefs H W
+                                image_cond_in = torch.cat([ref_latent.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
 
                             noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
                             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
