@@ -3070,6 +3070,8 @@ class WanVideoSampler:
                     "humo_audio_scale": humo_audio_scale if humo_audio is not None else 1,
                     "wananim_pose_latents": wananim_pose_latents.to(device) if wananim_pose_latents is not None else None, # WanAnimate pose latents
                     "wananim_face_pixel_values": wananim_face_pixels.to(device, torch.float32) if wananim_face_pixels is not None else None, # WanAnimate face images
+                    "wananim_pose_strength": wananim_pose_strength,
+                    "wananim_face_strength": wananim_face_strength
                 }
 
                 batch_size = 1
