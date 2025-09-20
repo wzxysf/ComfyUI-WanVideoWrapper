@@ -219,7 +219,7 @@ class HuMoEmbeds:
         vae.to(device)
         zero_frames = torch.zeros(1, 3, pixel_frame_num + 4*num_refs, height, width, device=device, dtype=vae.dtype)
         zero_latents = vae.encode(zero_frames, device=device, tiled=tiled_vae)[0].to(offload_device)
-        vae.model.clear_cache()
+        
         vae.to(offload_device)
         mm.soft_empty_cache()
 
