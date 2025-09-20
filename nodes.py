@@ -4324,6 +4324,9 @@ class WanVideoSampler:
                             self.cache_state = [None, None]
                           
                             if ref_latent is not None:
+                                if offload:
+                                    offload_transformer(transformer)
+                                    offloaded = True
                                 vae.to(device)
                                 if ref_masks is not None:
                                     msk = ref_masks_in[:, start_latent:end_latent].to(device, dtype)
