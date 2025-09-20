@@ -2383,7 +2383,7 @@ class WanVideoSampler:
         wananim_face_pixels = image_embeds.get("face_pixels", None)
         if image_cond is None:
             image_cond = image_embeds.get("ref_latent", None)
-            has_ref = image_cond is not None
+            has_ref = image_cond is not None or has_ref
 
         latent_video_length = noise.shape[1]
 
