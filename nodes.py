@@ -3915,7 +3915,7 @@ class WanVideoSampler:
                                 elif gguf_reader is not None: #handle GGUF
                                     load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
                                 #blockswap init
-                                init_blockswap(transformer, block_swap_args, device, dtype)
+                                init_blockswap(transformer, block_swap_args, model)
 
                             # Use the appropriate prompt for this section
                             if len(text_embeds["prompt_embeds"]) > 1:
