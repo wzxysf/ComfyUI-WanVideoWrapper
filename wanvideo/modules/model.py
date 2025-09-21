@@ -407,7 +407,7 @@ class WanSelfAttention(nn.Module):
             self.v = nn.Linear(in_features, out_features)
         self.o = nn.Linear(in_features, out_features)
 
-        if hasattr(torch.nn, 'RMSNorm'):
+        if False: # disable for now, seems to degrade quality
             self.norm_q = WanFusedRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
             self.norm_k = WanFusedRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
         else:
