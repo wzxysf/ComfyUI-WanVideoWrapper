@@ -1923,8 +1923,8 @@
         "Node name for S&R": "WanVideoVAELoader"
       },
       "widgets_values": [
-        "wanvideo\\Wan2_1_VAE_fp32.safetensors",
-        "fp32"
+        "wanvideo\\Wan2_1_VAE_bf16.safetensors",
+        "bf16"
       ],
       "color": "#322",
       "bgcolor": "#533"
