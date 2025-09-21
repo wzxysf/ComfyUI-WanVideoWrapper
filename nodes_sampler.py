@@ -2504,20 +2504,8 @@ class WanVideoSampler:
                             noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
                             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
-                            # pose_input_slice = None
-                            # if wananim_pose_latents is not None:
-                            #     pose_input_slice = wananim_pose_latents[:, :, start_latent:end_latent].to(device, dtype)
-                            #     # Pad if slice is too short
-                            #     if pose_input_slice.shape[2] < latent_window_size:
-                            #         log.info(f"WanAnimate: Padding pose latents from {pose_input_slice.shape} to length {latent_window_size}")
-                            #         pad_len = latent_window_size - pose_input_slice.shape[2]
-                            #         pad = torch.zeros(pose_input_slice.shape[0], pose_input_slice.shape[1], pad_len, pose_input_slice.shape[3], pose_input_slice.shape[4], device=pose_input_slice.device, dtype=pose_input_slice.dtype)
-                            #         pose_input_slice = torch.cat([pose_input_slice, pad], dim=2)
-                            #         del pad
-                            #     pose_input_slice = pose_input_slice.to(device, dtype)
                             if pose_images is not None:
                                 pose_image_slice = pose_images_in[:, start:end].to(device)
-                                print(pose_image_slice.shape)
                                 pose_input_slice = vae.encode([pose_image_slice], device,tiled=tiled_vae).to(dtype)
                             
                             vae.to(offload_device)
