@@ -82,21 +82,6 @@ class RMSNorm(nn.Module):
         return output
 
 
-class FaceAdapter(nn.Module):
-    def __init__(self, feature_dim, num_heads, num_adapter_layers=1, dtype=None, device=None):
-        super().__init__()
-        self.fuser_blocks = nn.ModuleList([FaceBlock(feature_dim, num_heads, device=device, dtype=dtype) for _ in range(num_adapter_layers)])
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        motion_embed: torch.Tensor,
-        idx: int,
-    ) -> torch.Tensor:
-
-        return self.fuser_blocks[idx](x, motion_embed)
-
-
 class FaceBlock(nn.Module):
     def __init__(self, feature_dim, num_heads, dtype=None, device=None):
         super().__init__()

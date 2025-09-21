@@ -2644,6 +2644,7 @@ class WanVideoSampler:
                                     cm_result = cm.transfer(src=img, ref=ref_images.permute(1, 2, 3, 0).squeeze(0).cpu().float().numpy(), method=colormatch)
                                     cm_result_list.append(torch.from_numpy(cm_result).to(vae.dtype))
                                 videos = torch.stack(cm_result_list, dim=0).permute(3, 0, 1, 2)
+                                del cm_result_list
 
                             current_ref_images = videos[:, -1:].clone().detach()
 

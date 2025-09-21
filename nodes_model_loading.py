@@ -4,6 +4,7 @@ import os, gc, uuid
 from .utils import log, apply_lora
 import numpy as np
 from tqdm import tqdm
+import re
 
 from .wanvideo.modules.model import WanModel, LoRALinearLayer
 from .wanvideo.modules.t5 import T5EncoderModel
@@ -758,6 +759,17 @@ class WanVideoSetLoRAs:
 
         return (patcher,)
 
+def rename_fuser_block(name):
+    # map fuser blocks to main blocks
+    new_name = name
+    if "face_adapter.fuser_blocks." in name:
+        match = re.search(r'face_adapter\.fuser_blocks\.(\d+)\.', name)
+        if match:
+            fuser_block_num = int(match.group(1))
+            main_block_num = fuser_block_num * 5
+            new_name = name.replace(f"face_adapter.fuser_blocks.{fuser_block_num}.", f"blocks.{main_block_num}.fuser_block.")
+    return new_name
+
 def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
                  transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
     params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", 
@@ -784,6 +796,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             all_tensors.extend(r.tensors)
         for tensor in all_tensors:
             name = tensor.name
+            name = rename_fuser_block(name)
             if "glob" not in name and "audio_proj" in name:
                 name = name.replace("audio_proj", "multitalk_audio_proj")
             load_device = device
@@ -1051,6 +1064,14 @@ class WanVideoModelLoader:
             from .gguf.gguf import load_gguf
             sd, reader = load_gguf(model_path)
             gguf_reader.append(reader)
+
+        is_wananimate = "pose_patch_embedding.weight" in sd
+        # rename WanAnimate face fuser block keys to insert into main blocks instead
+        if is_wananimate:
+            for key in list(sd.keys()):
+                new_key = rename_fuser_block(key)
+                if new_key != key:
+                    sd[new_key] = sd.pop(key)
 
         if quantization == "disabled":
             for k, v in sd.items():
