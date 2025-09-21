@@ -335,6 +335,29 @@ class WanRMSNorm(nn.Module):
             start_idx = end_idx
             
         return output
+    
+class WanFusedRMSNorm(nn.RMSNorm):
+    def forward(self, x, num_chunks=1):
+        use_chunked = num_chunks > 1
+        if use_chunked:
+            return self.forward_chunked(x, num_chunks)
+        else:
+            return super().forward(x)
+
+    def forward_chunked(self, x, num_chunks=4):
+        output = torch.empty_like(x)
+        
+        chunk_sizes = [x.shape[1] // num_chunks + (1 if i < x.shape[1] % num_chunks else 0) 
+                    for i in range(num_chunks)]
+        
+        start_idx = 0
+        for size in chunk_sizes:
+            end_idx = start_idx + size
+            chunk = x[:, start_idx:end_idx, :]
+            output[:, start_idx:end_idx, :] = super().forward(chunk)
+            start_idx = end_idx
+            
+        return output
 
 
 class WanLayerNorm(nn.LayerNorm):
@@ -383,9 +406,14 @@ class WanSelfAttention(nn.Module):
             self.k = nn.Linear(in_features, out_features)
             self.v = nn.Linear(in_features, out_features)
         self.o = nn.Linear(in_features, out_features)
-        self.norm_q = WanRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = WanRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
-    
+
+        if hasattr(torch.nn, 'RMSNorm'):
+            self.norm_q = WanFusedRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
+            self.norm_k = WanFusedRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
+        else:
+            self.norm_q = WanRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
+            self.norm_k = WanRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
+
     def qkv_fn(self, x):
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
         q = self.norm_q(self.q(x)).view(b, s, n, d)
