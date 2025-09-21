@@ -795,8 +795,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         for r in reader:
             all_tensors.extend(r.tensors)
         for tensor in all_tensors:
-            name = tensor.name
-            name = rename_fuser_block(name)
+            name = rename_fuser_block(tensor.name)
             if "glob" not in name and "audio_proj" in name:
                 name = name.replace("audio_proj", "multitalk_audio_proj")
             load_device = device

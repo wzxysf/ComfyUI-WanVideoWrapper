@@ -1040,6 +1040,8 @@ class WanVideoAnimateEmbeds:
         else:
             latent_window_size = latent_window_size + 1
 
+        mm.soft_empty_cache()
+        gc.collect()
         vae.to(device)
         # Resize and rearrange the input image dimensions
         pose_latents = ref_latents = ref_latent = None
@@ -1050,16 +1052,18 @@ class WanVideoAnimateEmbeds:
             else:
                 resized_pose_images = pose_images.permute(3, 0, 1, 2) # C, T, H, W
             resized_pose_images = resized_pose_images * 2 - 1
-            pose_latents = vae.encode([resized_pose_images.to(device, vae.dtype)], device,tiled=tiled_vae)
-            pose_latents = pose_latents.to(offload_device)
+            if not looping:
+                pose_latents = vae.encode([resized_pose_images.to(device, vae.dtype)], device,tiled=tiled_vae)
+                pose_latents = pose_latents.to(offload_device)
             
-            if not looping and pose_latents.shape[2] < latent_window_size:
-                log.info(f"WanAnimate: Padding pose latents from {pose_latents.shape} to length {latent_window_size}")
-                pad_len = latent_window_size - pose_latents.shape[2]
-                pad = torch.zeros(pose_latents.shape[0], pose_latents.shape[1], pad_len, pose_latents.shape[3], pose_latents.shape[4], device=pose_latents.device, dtype=pose_latents.dtype)
-                pose_latents = torch.cat([pose_latents, pad], dim=2)
-            print("pose_latents", pose_latents.shape)
-            del resized_pose_images
+                if pose_latents.shape[2] < latent_window_size:
+                    log.info(f"WanAnimate: Padding pose latents from {pose_latents.shape} to length {latent_window_size}")
+                    pad_len = latent_window_size - pose_latents.shape[2]
+                    pad = torch.zeros(pose_latents.shape[0], pose_latents.shape[1], pad_len, pose_latents.shape[3], pose_latents.shape[4], device=pose_latents.device, dtype=pose_latents.dtype)
+                    pose_latents = torch.cat([pose_latents, pad], dim=2)
+                del resized_pose_images
+            else:
+                resized_pose_images = resized_pose_images.to(offload_device, dtype=vae.dtype)            
 
         bg_latents = None
         if bg_images is not None:
@@ -1134,6 +1138,7 @@ class WanVideoAnimateEmbeds:
             "negative_clip_context": clip_embeds.get("negative_clip_embeds", None) if clip_embeds is not None else None,
             "max_seq_len": seq_len,
             "pose_latents": pose_latents,
+            "pose_images": resized_pose_images if pose_images is not None and looping else None,
             "bg_images": resized_bg_images if bg_images is not None and looping else None,
             "ref_masks": bg_mask if mask is not None and looping else None,
             "ref_latent": ref_latent,
