@@ -773,7 +773,7 @@ def rename_fuser_block(name):
 def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None, 
                  transformer_load_device=None, block_swap_args=None, gguf=False, reader=None, patcher=None):
     params_to_keep = {"time_in", "patch_embedding", "time_", "modulation", "text_embedding", 
-                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob", "face_encoder"}
+                      "adapter", "add", "ref_conv", "casual_audio_encoder", "cond_encoder", "frame_packer", "audio_proj_glob", "face_encoder", "fuser_block"}
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     cnt = 0
