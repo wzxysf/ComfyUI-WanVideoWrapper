@@ -2161,7 +2161,7 @@ class WanModel(torch.nn.Module):
         original_grid_sizes = grid_sizes.clone()
         x = [u.flatten(2).transpose(1, 2) for u in x]
 
-        seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.float32)
+        seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.int32)
         assert seq_lens.max() <= seq_len
 
         cond_mask_weight = None
