@@ -1141,6 +1141,7 @@ class WanVideoAnimateEmbeds:
             "pose_images": resized_pose_images if pose_images is not None and looping else None,
             "bg_images": resized_bg_images if bg_images is not None and looping else None,
             "ref_masks": bg_mask if mask is not None and looping else None,
+            "is_masked": mask is not None,
             "ref_latent": ref_latent,
             "ref_image": resized_ref_images if ref_images is not None else None,
             "face_pixels": resized_face_images if face_images is not None else None,

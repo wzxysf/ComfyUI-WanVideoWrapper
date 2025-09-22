@@ -507,6 +507,15 @@ class WanVideoSampler:
         wananim_pose_strength = image_embeds.get("pose_strength", 1.0)
         wananim_face_strength = image_embeds.get("face_strength", 1.0)
         wananim_face_pixels = image_embeds.get("face_pixels", None)
+        wananim_ref_masks = image_embeds.get("ref_masks", None)
+        wananim_is_masked = image_embeds.get("is_masked", False)
+        if not wananimate_loop: # create zero face pixels if mask is provided without face pixels, as masking seems to require face input to work properly
+            if wananim_face_pixels is None and wananim_is_masked:
+                if context_options is None:
+                    wananim_face_pixels = torch.zeros(1, 3, num_frames-1, 512, 512, dtype=torch.float32, device=offload_device)
+                else:
+                    wananim_face_pixels = torch.zeros(1, 3, context_options["context_frames"]-1, 512, 512, dtype=torch.float32, device=device)
+
         if image_cond is None:
             image_cond = image_embeds.get("ref_latent", None)
             has_ref = image_cond is not None or has_ref
@@ -1772,7 +1781,7 @@ class WanVideoSampler:
                                 partial_add_cond = add_cond[:, :, c].to(device, dtype)
 
                             partial_wananim_face_pixels = partial_wananim_pose_latents = None
-                            if wananim_face_pixels is not None:
+                            if wananim_face_pixels is not None and partial_wananim_face_pixels is None:
                                 start = c[0] * 4
                                 end = c[-1] * 4
                                 center_indices = torch.arange(start, end, 1)
@@ -2422,7 +2431,6 @@ class WanVideoSampler:
 
                         ref_latent = image_embeds.get("ref_latent", None)
                         ref_images = image_embeds.get("ref_image", None)
-                        ref_masks = image_embeds.get("ref_masks", None)
                         bg_images = image_embeds.get("bg_images", None)
                         pose_images = image_embeds.get("pose_images", None)
 
@@ -2431,9 +2439,9 @@ class WanVideoSampler:
                         if wananim_face_pixels is not None:
                             face_images = tensor_pingpong_pad(wananim_face_pixels, target_len)
                             log.info(f"WanAnimate: Face input {wananim_face_pixels.shape} padded to shape {face_images.shape}")
-                        if ref_masks is not None:
-                            ref_masks_in = tensor_pingpong_pad(ref_masks, target_latent_len)
-                            log.info(f"WanAnimate: Ref masks {ref_masks.shape} padded to shape {ref_masks.shape}")
+                        if wananim_ref_masks is not None:
+                            ref_masks_in = tensor_pingpong_pad(wananim_ref_masks, target_latent_len)
+                            log.info(f"WanAnimate: Ref masks {wananim_ref_masks.shape} padded to shape {ref_masks_in.shape}")
                         if bg_images is not None:
                             bg_images_in = tensor_pingpong_pad(bg_images, target_len)
                             log.info(f"WanAnimate: BG images {bg_images.shape} padded to shape {bg_images.shape}")
@@ -2474,14 +2482,14 @@ class WanVideoSampler:
                                     offload_transformer(transformer)
                                     offloaded = True
                                 vae.to(device)
-                                if ref_masks is not None:
+                                if wananim_ref_masks is not None:
                                     msk = ref_masks_in[:, start_latent:end_latent].to(device, dtype)
                                 else:
                                     msk = torch.zeros(4, latent_window_size, lat_h, lat_w, device=device, dtype=dtype)
                                 if bg_images is not None:
                                     bg_image_slice = bg_images_in[:, start:end].to(device)
                                 else:
-                                    bg_image_slice = torch.zeros(3, frame_window_size, lat_h * 8, lat_w * 8, device=device, dtype=vae.dtype)
+                                    bg_image_slice = torch.zeros(3, frame_window_size-refert_num, lat_h * 8, lat_w * 8, device=device, dtype=vae.dtype)
                                 if mask_reft_len == 0:
                                     temporal_ref_latents = vae.encode([bg_image_slice], device,tiled=tiled_vae)[0]
                                 else:
@@ -2504,11 +2512,17 @@ class WanVideoSampler:
                             noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
                             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
+                            pose_input_slice = None
                             if pose_images is not None:
                                 pose_image_slice = pose_images_in[:, start:end].to(device)
                                 pose_input_slice = vae.encode([pose_image_slice], device,tiled=tiled_vae).to(dtype)
                             
                             vae.to(offload_device)
+
+                            if wananim_face_pixels is None and wananim_ref_masks is not None:
+                                face_images = torch.zeros(1, 3, frame_window_size, 512, 512, device=device, dtype=torch.float32)
+                            elif wananim_face_pixels is not None:
+                                face_images = face_images[:, :, start:end].to(device, torch.float32) if face_images is not None else None
 
                             if samples is not None:
                                 input_samples = samples["samples"].squeeze(0).to(noise)
@@ -2593,10 +2607,8 @@ class WanVideoSampler:
 
                                 noise_pred, self.cache_state = predict_with_cfg(
                                     latent_model_input, cfg[min(i, len(timesteps)-1)], positive, text_embeds["negative_prompt_embeds"],
-                                    timestep, i, cache_state=self.cache_state,
-                                    image_cond = image_cond_in,
-                                    wananim_face_pixels=face_images[:, :, start:end].to(device, torch.float32) if face_images is not None else None,
-                                    wananim_pose_latents=pose_input_slice, uni3c_data = uni3c_data_input,
+                                    timestep, i, cache_state=self.cache_state, image_cond=image_cond_in, wananim_face_pixels=face_images,
+                                    wananim_pose_latents=pose_input_slice, uni3c_data=uni3c_data_input,
                                  )
                                 if callback is not None:
                                     callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach().permute(1,0,2,3)
