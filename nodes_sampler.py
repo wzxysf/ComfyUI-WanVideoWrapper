@@ -498,7 +498,7 @@ class WanVideoSampler:
         if not isinstance(humo_audio_cfg_scale, list):
             humo_audio_cfg_scale = [humo_audio_cfg_scale] * (steps + 1)
 
-        # WanAnim inputs
+        # region WanAnim inputs
         frame_window_size = image_embeds.get("frame_window_size", 77)
         wananimate_loop = image_embeds.get("looping", False)
         if wananimate_loop and context_options is not None:
@@ -2533,9 +2533,9 @@ class WanVideoSampler:
                             vae.to(offload_device)
 
                             if wananim_face_pixels is None and wananim_ref_masks is not None:
-                                face_images = torch.zeros(1, 3, frame_window_size, 512, 512, device=device, dtype=torch.float32)
+                                face_images_in = torch.zeros(1, 3, frame_window_size, 512, 512, device=device, dtype=torch.float32)
                             elif wananim_face_pixels is not None:
-                                face_images = face_images[:, :, start:end].to(device, torch.float32) if face_images is not None else None
+                                face_images_in = face_images[:, :, start:end].to(device, torch.float32) if face_images is not None else None
 
                             if samples is not None:
                                 input_samples = samples["samples"].squeeze(0).to(noise)
@@ -2620,7 +2620,7 @@ class WanVideoSampler:
 
                                 noise_pred, self.cache_state = predict_with_cfg(
                                     latent_model_input, cfg[min(i, len(timesteps)-1)], positive, text_embeds["negative_prompt_embeds"],
-                                    timestep, i, cache_state=self.cache_state, image_cond=image_cond_in, wananim_face_pixels=face_images,
+                                    timestep, i, cache_state=self.cache_state, image_cond=image_cond_in, wananim_face_pixels=face_images_in,
                                     wananim_pose_latents=pose_input_slice, uni3c_data=uni3c_data_input,
                                  )
                                 if callback is not None:
