@@ -1230,6 +1230,25 @@ class WanVideoAddExtraLatent:
         updated = dict(embeds)
         updated["extra_latents"] = extra_latents_list
         return (updated,)
+    
+class WanVideoAddLucyEditLatents:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "embeds": ("WANVIDIMAGE_EMBEDS",),
+                    "extra_latents": ("LATENT",),
+                }
+        }
+
+    RETURN_TYPES = ("WANVIDIMAGE_EMBEDS",)
+    RETURN_NAMES = ("image_embeds",)
+    FUNCTION = "add"
+    CATEGORY = "WanVideoWrapper"
+
+    def add(self, embeds, extra_latents):
+        updated = dict(embeds)
+        updated["extra_channel_latents"] = extra_latents["samples"]
+        return (updated,)
 
 class WanVideoMiniMaxRemoverEmbeds:
     @classmethod
@@ -2126,6 +2145,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoRoPEFunction": WanVideoRoPEFunction,
     "WanVideoAddPusaNoise": WanVideoAddPusaNoise,
     "WanVideoAnimateEmbeds": WanVideoAnimateEmbeds,
+    "WanVideoAddLucyEditLatents": WanVideoAddLucyEditLatents,
     }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2163,4 +2183,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoRoPEFunction": "WanVideo RoPE Function",
     "WanVideoAddPusaNoise": "WanVideo Add Pusa Noise",
     "WanVideoAnimateEmbeds": "WanVideo Animate Embeds",
+    "WanVideoAddLucyEditLatents": "WanVideo Add LucyEdit Latents",
 }

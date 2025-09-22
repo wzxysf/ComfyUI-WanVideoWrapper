@@ -791,6 +791,11 @@ class WanVideoSampler:
                     noise_multipliers[idx] = noise_multiplier_list[i]
                 log.info(f"Using Pusa noise multipliers: {noise_multipliers}")
 
+        # lucy edit
+        extra_channel_latents = image_embeds.get("extra_channel_latents", None)
+        if extra_channel_latents is not None:
+            extra_channel_latents = extra_channel_latents[0].to(noise)
+
         latent = noise.to(device)
 
         #controlnet
@@ -1171,6 +1176,14 @@ class WanVideoSampler:
                             humo_audio_input_neg = None
                 else:
                     humo_audio_input = humo_audio_input_neg = None
+
+                if extra_channel_latents is not None:
+                    if context_window is not None:
+                        extra_channel_latents_input = extra_channel_latents[:, context_window].to(z)
+                    else:
+                        extra_channel_latents_input = extra_channel_latents.to(z)
+                    z = torch.cat([z, extra_channel_latents_input])
+
                 base_params = {
                     'x': [z], # latent
                     'y': [image_cond_input] if image_cond_input is not None else None, # image cond
