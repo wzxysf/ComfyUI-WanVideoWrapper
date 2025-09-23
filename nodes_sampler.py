@@ -2447,7 +2447,7 @@ class WanVideoSampler:
                         bg_images = image_embeds.get("bg_images", None)
                         pose_images = image_embeds.get("pose_images", None)
 
-                        current_ref_images = face_images = None
+                        current_ref_images = face_images = face_images_in = None
 
                         if wananim_face_pixels is not None:
                             face_images = tensor_pingpong_pad(wananim_face_pixels, target_len)
