@@ -1263,9 +1263,10 @@ class VaceWanAttentionBlock(WanAttentionBlock):
             eps=1e-6,
             block_id=0,
             attention_mode='sdpa',
-            rope_func="comfy"
+            rope_func="comfy",
+            rms_norm_function="default"
     ):
-        super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, cross_attn_norm, eps, attention_mode, rope_func)
+        super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, cross_attn_norm, eps, attention_mode, rope_func, rms_norm_function=rms_norm_function)
         self.block_id = block_id
         if block_id == 0:
             self.before_proj = nn.Linear(in_features, out_features)
