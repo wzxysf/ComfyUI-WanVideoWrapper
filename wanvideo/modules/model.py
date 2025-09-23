@@ -381,7 +381,8 @@ class WanSelfAttention(nn.Module):
                  num_heads,
                  qk_norm=True,
                  eps=1e-6,
-                 attention_mode='sdpa',
+                 attention_mode="sdpa",
+                 rms_norm_function="default",
                  kv_dim=None):
         assert out_features % num_heads == 0
         super().__init__()
@@ -407,7 +408,8 @@ class WanSelfAttention(nn.Module):
             self.v = nn.Linear(in_features, out_features)
         self.o = nn.Linear(in_features, out_features)
 
-        if False: # disable for now, seems to degrade quality
+        if rms_norm_function=="pytorch":
+            print("Using PyTorch FusedRMSNorm")
             self.norm_q = WanFusedRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
             self.norm_k = WanFusedRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
         else:
@@ -616,8 +618,8 @@ class LoRALinearLayer(nn.Module):
 #region crossattn
 class WanT2VCrossAttention(WanSelfAttention):
 
-    def __init__(self, in_features, out_features, num_heads, kv_dim=None, qk_norm=True, eps=1e-6, attention_mode='sdpa'):
-        super().__init__(in_features, out_features, num_heads, qk_norm, eps, kv_dim=kv_dim)
+    def __init__(self, in_features, out_features, num_heads, kv_dim=None, qk_norm=True, eps=1e-6, attention_mode='sdpa', rms_norm_function="default"):
+        super().__init__(in_features, out_features, num_heads, qk_norm, eps, kv_dim=kv_dim, rms_norm_function=rms_norm_function)
         self.attention_mode = attention_mode
 
     def forward(self, x, context, grid_sizes=None, clip_embed=None, audio_proj=None, audio_scale=1.0, 
@@ -681,8 +683,8 @@ class WanT2VCrossAttention(WanSelfAttention):
 
 class WanI2VCrossAttention(WanSelfAttention):
 
-    def __init__(self, in_features, out_features, num_heads, qk_norm=True, eps=1e-6, attention_mode='sdpa'):
-        super().__init__(in_features, out_features, num_heads, qk_norm, eps)
+    def __init__(self, in_features, out_features, num_heads, qk_norm=True, eps=1e-6, attention_mode='sdpa', rms_norm_function="default"):
+        super().__init__(in_features, out_features, num_heads, qk_norm, eps, rms_norm_function=rms_norm_function)
         self.k_img = nn.Linear(in_features, out_features)
         self.v_img = nn.Linear(in_features, out_features)
         self.norm_k_img = WanRMSNorm(out_features, eps=eps) if qk_norm else nn.Identity()
@@ -753,8 +755,8 @@ class WanI2VCrossAttention(WanSelfAttention):
     
 class WanHuMoCrossAttention(WanSelfAttention):
 
-    def __init__(self, in_features, out_features, num_heads, kv_dim=None, qk_norm=True, eps=1e-6, attention_mode='sdpa'):
-        super().__init__(in_features, out_features, num_heads, qk_norm, eps, kv_dim=kv_dim)
+    def __init__(self, in_features, out_features, num_heads, kv_dim=None, qk_norm=True, eps=1e-6, attention_mode='sdpa', rms_norm_function="default"):
+        super().__init__(in_features, out_features, num_heads, qk_norm, eps, kv_dim=kv_dim, rms_norm_function=rms_norm_function)
         self.attention_mode = attention_mode
 
     def forward(self, x, context, grid_sizes, **kwargs):
@@ -834,8 +836,9 @@ class WanAttentionBlock(nn.Module):
                  qk_norm=True,
                  cross_attn_norm=False,
                  eps=1e-6,
-                 attention_mode='sdpa',
+                 attention_mode="sdpa",
                  rope_func="comfy",
+                 rms_norm_function="default",
                  use_motion_attn=False,
                  use_humo_audio_attn=False,
                  face_fuser_block=False
@@ -860,7 +863,7 @@ class WanAttentionBlock(nn.Module):
 
         # layers
         self.norm1 = WanLayerNorm(out_features, eps)
-        self.self_attn = WanSelfAttention(in_features, out_features, num_heads, qk_norm, eps, self.attention_mode)
+        self.self_attn = WanSelfAttention(in_features, out_features, num_heads, qk_norm, eps, self.attention_mode, rms_norm_function=rms_norm_function)
 
         # MTV Crafter motion attn
         if self.use_motion_attn:
@@ -869,12 +872,7 @@ class WanAttentionBlock(nn.Module):
 
         if cross_attn_type != "no_cross_attn":
             self.norm3 = WanLayerNorm(out_features, eps, elementwise_affine=True) if cross_attn_norm else nn.Identity()
-            self.cross_attn = WAN_CROSSATTENTION_CLASSES[cross_attn_type](in_features,
-                                                                          out_features,
-                                                                          num_heads,
-                                                                          qk_norm,
-                                                                          eps,#attention_mode=attention_mode sageattn doesn't seem faster here
-                                                                          )
+            self.cross_attn = WAN_CROSSATTENTION_CLASSES[cross_attn_type](in_features, out_features, num_heads, qk_norm, eps, rms_norm_function=rms_norm_function)
         self.norm2 = WanLayerNorm(out_features, eps)
         self.ffn = nn.Sequential(
             nn.Linear(in_features, ffn_dim), nn.GELU(approximate='tanh'),
@@ -1477,6 +1475,7 @@ class WanModel(torch.nn.Module):
                 eps=1e-6,
                 attention_mode='sdpa',
                 rope_func='comfy',
+                rms_norm_function='default',
                 main_device=torch.device('cuda'),
                 offload_device=torch.device('cpu'),
                 dtype=torch.float16,
@@ -1640,7 +1639,7 @@ class WanModel(torch.nn.Module):
             # vace blocks
             self.vace_blocks = nn.ModuleList([
                 VaceWanAttentionBlock('t2v_cross_attn', self.in_features, self.out_features, self.ffn_dim, self.ffn2_dim,self.num_heads, self.qk_norm,
-                                        self.cross_attn_norm, self.eps, block_id=i, attention_mode=self.attention_mode, rope_func=self.rope_func)
+                                        self.cross_attn_norm, self.eps, block_id=i, attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function)
                 for i in self.vace_layers
             ])
 
@@ -1651,7 +1650,7 @@ class WanModel(torch.nn.Module):
             self.blocks = nn.ModuleList([
             BaseWanAttentionBlock('t2v_cross_attn', self.in_features, self.out_features, ffn_dim, self.ffn2_dim, num_heads,
                               qk_norm, cross_attn_norm, eps,
-                              attention_mode=self.attention_mode, rope_func=self.rope_func,
+                              attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function,
                               block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None)
             for i in range(num_layers)
             ])
@@ -1667,8 +1666,9 @@ class WanModel(torch.nn.Module):
             self.blocks = nn.ModuleList([
                 WanAttentionBlock(cross_attn_type, self.in_features, self.out_features, ffn_dim, ffn2_dim, num_heads,
                                 qk_norm, cross_attn_norm, eps,
-                                attention_mode=self.attention_mode, rope_func=self.rope_func, use_motion_attn=(i % 4 == 0 and use_motion_attn), use_humo_audio_attn=self.humo_audio,
-                                face_fuser_block = i % 5 == 0 and is_wananimate)
+                                attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function, 
+                                use_motion_attn=(i % 4 == 0 and use_motion_attn), use_humo_audio_attn=self.humo_audio,
+                                face_fuser_block = (i % 5 == 0 and is_wananimate))
                 for i in range(num_layers)
             ])
         #MTV Crafter
