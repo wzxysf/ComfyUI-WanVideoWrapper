@@ -101,10 +101,6 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
     steps = len(timesteps)
     if (isinstance(start_step, int) and end_step != -1 and start_step >= end_step) or (not isinstance(start_step, int) and start_step != -1 and end_step >= start_step):
         raise ValueError("start_step must be less than end_step")
-    if denoise_strength < 1.0:
-        if start_step != 0:
-            raise ValueError("start_step must be 0 when denoise_strength is used")
-        start_step = steps - int(steps * denoise_strength) - 1
 
     # Determine start and end indices for slicing
     start_idx = 0

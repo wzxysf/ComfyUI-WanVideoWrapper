@@ -227,6 +227,12 @@ class WanVideoSampler:
         seed_g.manual_seed(seed)
 
         #region Scheduler
+        if denoise_strength < 1.0:
+            if start_step != 0:
+                raise ValueError("start_step must be 0 when denoise_strength is used")
+            start_step = steps - int(steps * denoise_strength) - 1
+            add_noise_to_samples = True #for now to not break old workflows
+
         sample_scheduler = None
         if isinstance(scheduler, dict):
             sample_scheduler = copy.deepcopy(scheduler["sample_scheduler"])
@@ -241,15 +247,6 @@ class WanVideoSampler:
         steps = len(timesteps)
 
         is_pusa = "pusa" in sample_scheduler.__class__.__name__.lower()
-
-        if end_step != -1 and start_step >= end_step:
-            raise ValueError("start_step must be less than end_step")
-
-        if denoise_strength < 1.0:
-            if start_step != 0:
-                raise ValueError("start_step must be 0 when denoise_strength is used")
-            start_step = steps - int(steps * denoise_strength) - 1
-            add_noise_to_samples = True #for now to not break old workflows
 
         scheduler_step_args = {"generator": seed_g}
         step_sig = inspect.signature(sample_scheduler.step)
@@ -2507,7 +2504,7 @@ class WanVideoSampler:
                                     temporal_ref_latents = vae.encode([bg_image_slice], device,tiled=tiled_vae)[0]
                                 else:
                                     concatenated = torch.cat([current_ref_images.to(device, dtype=vae.dtype), bg_image_slice[:, mask_reft_len:]], dim=1)
-                                    temporal_ref_latents = vae.encode([concatenated.to(device, vae.dtype)], device,tiled=tiled_vae)[0]
+                                    temporal_ref_latents = vae.encode([concatenated.to(device, vae.dtype)], device,tiled=tiled_vae, pbar=False)[0]
                                     msk[:, :mask_reft_len] = 1
 
                                 if msk.shape[1] != temporal_ref_latents.shape[1]:
@@ -2528,7 +2525,7 @@ class WanVideoSampler:
                             pose_input_slice = None
                             if pose_images is not None:
                                 pose_image_slice = pose_images_in[:, start:end].to(device)
-                                pose_input_slice = vae.encode([pose_image_slice], device,tiled=tiled_vae).to(dtype)
+                                pose_input_slice = vae.encode([pose_image_slice], device,tiled=tiled_vae, pbar=False).to(dtype)
                             
                             vae.to(offload_device)
 
