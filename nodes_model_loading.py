@@ -63,7 +63,7 @@ try:
     from comfy.latent_formats import Wan21, Wan22
     latent_format = Wan21
 except: #for backwards compatibility
-    log.warning("Wan21 latent format not found, update ComfyUI for better livepreview")
+    log.warning("⚠️ Wan21 latent format not found, update ComfyUI for better livepreview ⚠️")
     from comfy.latent_formats import HunyuanVideo
     latent_format = HunyuanVideo
 
@@ -1092,7 +1092,7 @@ class WanVideoModelLoader:
             major, minor = torch.cuda.get_device_capability(device)
             log.info(f"CUDA Compute Capability: {major}.{minor}")
             if compile_args is not None and "e4" in quantization and (major, minor) < (8, 9):
-                log.warning("Torch.compile with fp8_e4m3fn weights on CUDA compute capability < 8.9 is not supported. Please use fp8_e5m2, GGUF or higher precision instead.")
+                log.warning("⚠️Torch.compile with fp8_e4m3fn weights on CUDA compute capability < 8.9 is not supported. Please use fp8_e5m2, GGUF or higher precision instead.⚠️")
 
         if "scaled_fp8" in sd and "scaled" not in quantization:
             raise ValueError("The model is a scaled fp8 model, please set quantization to '_scaled'")

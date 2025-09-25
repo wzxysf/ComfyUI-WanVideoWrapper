@@ -1,3 +1,14 @@
+try:
+    from .utils import check_duplicate_nodes, log
+    duplicate_dirs = check_duplicate_nodes()
+    if duplicate_dirs:
+        warning_msg = f"⚠️  Found {len(duplicate_dirs)} other WanVideoWrapper directories: ⚠️\n"
+        for dir_path in duplicate_dirs:
+            warning_msg += f"  - {dir_path}\n"
+        log.warning(warning_msg + "Please remove duplicates to avoid possible conflicts.")
+except:
+    pass
+
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 from .recammaster.nodes import NODE_CLASS_MAPPINGS as RECAM_MASTER_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as RECAM_MASTER_NODE_DISPLAY_NAME_MAPPINGS
 from .skyreels.nodes import NODE_CLASS_MAPPINGS as SKYREELS_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as SKYREELS_NODE_DISPLAY_NAME_MAPPINGS
@@ -17,36 +28,36 @@ from .s2v.nodes import NODE_CLASS_MAPPINGS as S2V_NODE_CLASS_MAPPINGS, NODE_DISP
 try:
     from .qwen.qwen import NODE_CLASS_MAPPINGS as QWEN_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as QWEN_NODE_DISPLAY_NAME_MAPPINGS
 except Exception as e:
-    print(f"Qwen nodes not available due to error in importing them: {e}")
+    log.warning(f"⚠️ WanVideoWrapper: Qwen nodes not available due to error in importing them: {e} ⚠️")
     QWEN_NODE_CLASS_MAPPINGS = {}
     QWEN_NODE_DISPLAY_NAME_MAPPINGS = {}
-   
+
 
 try:
     from .fantasyportrait.nodes import NODE_CLASS_MAPPINGS as FANTASYPORTRAIT_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as FANTASYPORTRAIT_NODE_DISPLAY_NAME_MAPPINGS
 except Exception as e:
-    print(f"FantasyPortrait nodes not available due to error in importing them: {e}")
+    log.warning(f"⚠️ WanVideoWrapper: FantasyPortrait nodes not available due to error in importing them: {e} ⚠️")
     FANTASYPORTRAIT_NODE_CLASS_MAPPINGS = {}
     FANTASYPORTRAIT_NODE_DISPLAY_NAME_MAPPINGS = {}
 
 try:
     from .unianimate.nodes import NODE_CLASS_MAPPINGS as UNIANIMATE_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as UNIANIMATE_NODE_DISPLAY_NAME_MAPPINGS
 except Exception as e:
-    print(f"UniAnimate nodes not available due to error in importing them: {e}")
+    log.warning(f"⚠️ WanVideoWrapper: UniAnimate nodes not available due to error in importing them: {e} ⚠️")
     UNIANIMATE_NODE_CLASS_MAPPINGS = {}
     UNIANIMATE_NODE_DISPLAY_NAME_MAPPINGS = {}
 
 try:
     from .MTV.nodes import NODE_CLASS_MAPPINGS as MTV_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as MTV_NODE_DISPLAY_NAME_MAPPINGS
 except Exception as e:
-    print(f"MTV nodes not available due to error in importing them: {e}")
+    log.warning(f"⚠️ WanVideoWrapper: MTV nodes not available due to error in importing them: {e} ⚠️")
     MTV_NODE_CLASS_MAPPINGS = {}
     MTV_NODE_DISPLAY_NAME_MAPPINGS = {}
 
 try:
     from .HuMo.nodes import NODE_CLASS_MAPPINGS as HUMO_NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as HUMO_NODE_DISPLAY_NAME_MAPPINGS
 except Exception as e:
-    print(f"HuMo nodes not available due to error in importing them: {e}")
+    log.warning(f"⚠️ WanVideoWrapper: HuMo nodes not available due to error in importing them: {e} ⚠️")
     HUMO_NODE_CLASS_MAPPINGS = {}
     HUMO_NODE_DISPLAY_NAME_MAPPINGS = {}
 
