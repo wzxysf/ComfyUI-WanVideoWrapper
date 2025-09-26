@@ -30,8 +30,8 @@ class WanLynxIPCrossAttention(nn.Module):
         b, n, d = x.size(0), block.num_heads, block.head_dim
 
         if self.registers is not None:
-            print("self.registers.shape", self.registers.shape) #torch.Size([1, 16, 5120])
-            print("ip_x.shape", ip_x.shape) #torch.Size([1, 16, 5120])
+            #print("self.registers.shape", self.registers.shape) #torch.Size([1, 16, 5120])
+            #print("ip_x.shape", ip_x.shape) #torch.Size([1, 16, 5120])
            
             ip_lens = [ip_x.shape[1]]
             ip_x_list = vector_to_list(ip_x, ip_lens, 1)
@@ -39,14 +39,18 @@ class WanLynxIPCrossAttention(nn.Module):
             ip_x, ip_lens = list_to_vector(ip_x_list, 1)
 
         ip_key = self.to_k_ip(ip_x)
-        ip_key = ip_key * torch.rsqrt(ip_key.pow(2).mean(dim=-1, keepdim=True) + 1e-5).to(ip_key.dtype)
-
         ip_value = self.to_v_ip(ip_x)
 
-        ip_key = ip_key.view(b, -1, n, d)
-        ip_value = ip_value.view(b, -1, n, d)
+        if self.registers is None: # lite model normalization
+            ip_key = ip_key * torch.rsqrt(ip_key.pow(2).mean(dim=-1, keepdim=True) + 1e-5).to(ip_key.dtype)
+        else: # full model normalization
+            ip_key = block.norm_k(ip_key)
 
-        ip_x = attention(q, ip_key, ip_value).reshape(b, -1, n * d)
+        ip_x = attention(
+            q, 
+            ip_key.view(b, -1, n, d), 
+            ip_value.view(b, -1, n, d)
+        ).reshape(b, -1, n * d)
 
         return ip_x
 

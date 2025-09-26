@@ -561,19 +561,24 @@ class WanVideoExtraModelSelect:
             "required": {
                 "extra_model": (folder_paths.get_filename_list("unet_gguf") + folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' path to extra state dict to add to the main model"}),
             },
+            "optional": {
+                "prev_model":("VACEPATH", {"default": None, "tooltip": "For loading multiple extra models"}),
+            },
         }
 
     RETURN_TYPES = ("VACEPATH",)
     RETURN_NAMES = ("extra_model", )
-    FUNCTION = "getvacepath"
+    FUNCTION = "getmodelpath"
     CATEGORY = "WanVideoWrapper"
     DESCRIPTION = "Extra model to load and add to the main model, ie. VACE or MTV Crafter 'ComfyUI/models/diffusion_models'"
 
-    def getvacepath(self, extra_model):
-        extra_model = {
-            "path": folder_paths.get_full_path("diffusion_models", extra_model),
-        }
-        return (extra_model,)
+    def getmodelpath(self, extra_model, prev_model=None):
+        extra_model = {"path": folder_paths.get_full_path("diffusion_models", extra_model)}
+        if prev_model is not None and isinstance(prev_model, list):
+            extra_model_list = prev_model + [extra_model]
+        else:
+            extra_model_list = [extra_model]
+        return (extra_model_list,)
 
 class WanVideoLoraBlockEdit:
     def __init__(self):
@@ -1102,18 +1107,20 @@ class WanVideoModelLoader:
 
         # currently this can be VAE or MTV-Crafter weights
         if extra_model is not None:
-            if gguf:
-                if not extra_model["path"].endswith(".gguf"):
-                    raise ValueError("With GGUF main model the extra model must also be GGUF quantized, if the main model already has VACE included, you can disconnect the extra module loader")
-                extra_sd, extra_reader = load_gguf(extra_model["path"])
-                gguf_reader.append(extra_reader)
-                del extra_reader
-            else:
-                if extra_model["path"].endswith(".gguf"):
-                    raise ValueError("With GGUF extra model the main model must also be GGUF quantized model")
-                extra_sd = load_torch_file(extra_model["path"], device=transformer_load_device, safe_load=True)
-            sd.update(extra_sd)
-            del extra_sd
+            for _model in extra_model:
+                print("Loading extra model: ", _model["path"])
+                if gguf:
+                    if not _model["path"].endswith(".gguf"):
+                        raise ValueError("With GGUF main model the extra model must also be GGUF quantized, if the main model already has VACE included, you can disconnect the extra module loader")
+                    extra_sd, extra_reader = load_gguf(_model["path"])
+                    gguf_reader.append(extra_reader)
+                    del extra_reader
+                else:
+                    if _model["path"].endswith(".gguf"):
+                        raise ValueError("With GGUF extra model the main model must also be GGUF quantized model")
+                    extra_sd = load_torch_file(_model["path"], device=transformer_load_device, safe_load=True)
+                sd.update(extra_sd)
+                del extra_sd
 
         first_key = next(iter(sd))
         if first_key.startswith("model.diffusion_model."):
@@ -1144,9 +1151,11 @@ class WanVideoModelLoader:
         #lynx
         lynx_layers = "none"
         if "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd and "blocks.0.ref_adapter.to_k_ref.weight" in sd:
+            log.info("Lynx full model detected")
             n_registers = sd["blocks.0.cross_attn.ip_adapter.registers"].shape[1]
             lynx_layers = "full"
         elif "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd:
+            log.info("Lynx lite model detected")
             n_registers = 0
             lynx_layers = "lite"
 

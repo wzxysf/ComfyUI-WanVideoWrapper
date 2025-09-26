@@ -1307,11 +1307,15 @@ class BaseWanAttentionBlock(WanAttentionBlock):
         cross_attn_norm=False,
         eps=1e-6,
         block_id=None,
+        block_idx=0,
         attention_mode='sdpa',
         rope_func="comfy",
-        rms_norm_function="default"
+        rms_norm_function="default",
+        lynx_layers="none"
     ):
-        super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, cross_attn_norm, eps, attention_mode, rope_func, rms_norm_function=rms_norm_function)
+        super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, 
+                         cross_attn_norm, eps, attention_mode, rope_func, rms_norm_function=rms_norm_function,
+                         block_idx=block_idx, lynx_layers=lynx_layers)
         self.block_id = block_id
 
     def forward(self, x, vace_hints=None, vace_context_scale=[1.0], **kwargs):
@@ -1674,7 +1678,7 @@ class WanModel(torch.nn.Module):
             BaseWanAttentionBlock('t2v_cross_attn', self.in_features, self.out_features, ffn_dim, self.ffn2_dim, num_heads,
                               qk_norm, cross_attn_norm, eps,
                               attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function,
-                              block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None)
+                              block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None, lynx_layers=lynx_layers, block_idx=i)
             for i in range(num_layers)
             ])
         else:
@@ -2113,6 +2117,7 @@ class WanModel(torch.nn.Module):
                         submodule.step = current_step
 
         lynx_x_ip = None
+        lynx_ip_scale = 1.0
         if lynx_embeds is not None:
             if not is_uncond:
                 lynx_x_ip = lynx_embeds["ip_x"].to(self.main_device)
