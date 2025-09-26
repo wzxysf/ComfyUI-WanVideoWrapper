@@ -1141,6 +1141,15 @@ class WanVideoModelLoader:
         is_humo = "audio_proj.audio_proj_glob_1.layer.weight" in sd
         is_wananimate = "pose_patch_embedding.weight" in sd
 
+        #lynx
+        lynx_layers = "none"
+        if "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd and "blocks.0.ref_adapter.to_k_ref.weight" in sd:
+            n_registers = sd["blocks.0.cross_attn.ip_adapter.registers"].shape[1]
+            lynx_layers = "full"
+        elif "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd:
+            n_registers = 0
+            lynx_layers = "lite"
+
         model_type = "t2v"
         if "audio_injector.injector.0.k.weight" in sd:
             model_type = "s2v"
@@ -1259,6 +1268,7 @@ class WanVideoModelLoader:
             "humo_audio": is_humo,
             "is_wananimate": is_wananimate,
             "rms_norm_function": rms_norm_function,
+            "lynx_layers": lynx_layers,
 
         }
 
@@ -1399,27 +1409,31 @@ class WanVideoModelLoader:
                 del unianimate_sd
       
         if not gguf:
-            if merge_loras and lora is not None:
-                if not lora_low_mem_load:
-                    load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
-                
-                if control_lora:
-                    patch_control_lora(patcher.model.diffusion_model, device)
-                    patcher.model.is_patched = True   
+            if lora is not None:
+                if merge_loras:
+                    if not lora_low_mem_load:
+                        load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
                     
-                log.info("Merging LoRA to the model...")
-                patcher = apply_lora(
-                    patcher, device, transformer_load_device, params_to_keep=params_to_keep, dtype=weight_dtype, base_dtype=base_dtype, state_dict=sd, 
-                    low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights)
-                if not control_lora:
-                    scale_weights.clear()
-                    patcher.patches.clear()
+                    if control_lora:
+                        patch_control_lora(patcher.model.diffusion_model, device)
+                        patcher.model.is_patched = True   
+                        
+                    log.info("Merging LoRA to the model...")
+                    patcher = apply_lora(
+                        patcher, device, transformer_load_device, params_to_keep=params_to_keep, dtype=weight_dtype, base_dtype=base_dtype, state_dict=sd, 
+                        low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights)
+                    if not control_lora:
+                        scale_weights.clear()
+                        patcher.patches.clear()
+                    transformer.patched_linear = False
+                    sd = None
+                else:
+                    from .custom_linear import _replace_linear
+                    transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
+            else:
+                load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
                 transformer.patched_linear = False
                 sd = None
-            else:
-                from .custom_linear import _replace_linear
-                transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
-                transformer.patched_linear = True
 
         if "fast" in quantization:
             if lora is not None and not merge_loras:

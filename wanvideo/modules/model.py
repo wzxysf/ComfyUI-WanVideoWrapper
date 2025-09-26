@@ -620,11 +620,12 @@ class WanT2VCrossAttention(WanSelfAttention):
     def __init__(self, in_features, out_features, num_heads, kv_dim=None, qk_norm=True, eps=1e-6, attention_mode='sdpa', rms_norm_function="default"):
         super().__init__(in_features, out_features, num_heads, qk_norm, eps, kv_dim=kv_dim, rms_norm_function=rms_norm_function)
         self.attention_mode = attention_mode
+        self.ip_adapter = None
 
     def forward(self, x, context, grid_sizes=None, clip_embed=None, audio_proj=None, audio_scale=1.0, 
                 num_latent_frames=21, nag_params={}, nag_context=None, is_uncond=False, rope_func="comfy", 
                 inner_t=None, inner_c=None, cross_freqs=None,
-                adapter_proj=None, adapter_attn_mask=None, ip_scale=1.0, orig_seq_len=None, **kwargs):
+                adapter_proj=None, adapter_attn_mask=None, ip_scale=1.0, orig_seq_len=None, lynx_x_ip=None, lynx_ip_scale=1.0, **kwargs):
         b, n, d = x.size(0), self.num_heads, self.head_dim
         # compute query
         q = self.norm_q(self.q(x),num_chunks=2 if rope_func == "comfy_chunked" else 1).view(b, -1, n, d)
@@ -644,6 +645,10 @@ class WanT2VCrossAttention(WanSelfAttention):
             x_text = x_text.flatten(2)
 
         x = x_text
+
+        if lynx_x_ip is not None and self.ip_adapter is not None and ip_scale !=0:
+            lynx_x_ip = self.ip_adapter(self, q, x, lynx_x_ip)
+            x = x.add(lynx_x_ip, alpha=lynx_ip_scale)
 
         # FantasyTalking audio attention
         if audio_proj is not None:
@@ -840,7 +845,9 @@ class WanAttentionBlock(nn.Module):
                  rms_norm_function="default",
                  use_motion_attn=False,
                  use_humo_audio_attn=False,
-                 face_fuser_block=False
+                 face_fuser_block=False,
+                 lynx_layers="none",
+                 block_idx=0
                  ):
         super().__init__()
         self.dim = out_features
@@ -855,6 +862,7 @@ class WanAttentionBlock(nn.Module):
         self.dense_timesteps = 10
         self.dense_block = False
         self.dense_attention_mode = "sageattn"
+        self.block_idx = block_idx
 
         self.kv_cache = None
         self.use_motion_attn = use_motion_attn
@@ -888,6 +896,17 @@ class WanAttentionBlock(nn.Module):
         if face_fuser_block:
             from .wananimate.face_blocks import FaceBlock
             self.fuser_block = FaceBlock(self.dim, num_heads)
+
+        # Lynx
+        self.ref_adapter = None
+        if lynx_layers == "full":
+            from ...lynx.modules import WanLynxIPCrossAttention, WanLynxRefAttention
+            self.cross_attn.ip_adapter = WanLynxIPCrossAttention(cross_attention_dim=self.dim, dim=self.dim, n_registers=16)
+            self.ref_adapter = WanLynxRefAttention(dim=self.dim)
+        elif lynx_layers == "lite":
+            from ...lynx.modules import WanLynxIPCrossAttention
+            if self.block_idx % 2 == 0:
+                self.cross_attn.ip_adapter = WanLynxIPCrossAttention(cross_attention_dim=2048, dim=self.dim, n_registers=0, bias=False)
 
     #@torch.compiler.disable()
     def get_mod(self, e):
@@ -968,6 +987,7 @@ class WanAttentionBlock(nn.Module):
         reverse_time=False,
         mtv_motion_tokens=None, mtv_motion_rotary_emb=None, mtv_strength=1.0, mtv_freqs=None,
         humo_audio_input=None, humo_audio_scale=1.0,
+        lynx_x_ip=None, lynx_x_ref=None, lynx_ip_scale = 1.0, lynx_ref_scale=1.0,
     ):
         r"""
         Args:
@@ -1126,7 +1146,7 @@ class WanAttentionBlock(nn.Module):
                                         multitalk_audio_embedding, x_ref_attn_map, human_num, inner_t, inner_c, cross_freqs,
                                         adapter_proj=adapter_proj, ip_scale=ip_scale, 
                                         mtv_freqs=mtv_freqs, mtv_motion_tokens=mtv_motion_tokens, mtv_motion_rotary_emb=mtv_motion_rotary_emb, mtv_strength=mtv_strength,
-                                        humo_audio_input=humo_audio_input, humo_audio_scale=humo_audio_scale
+                                        humo_audio_input=humo_audio_input, humo_audio_scale=humo_audio_scale, lynx_x_ip=lynx_x_ip, lynx_ip_scale=lynx_ip_scale
                                         )
         else:
             if self.rope_func == "comfy_chunked":
@@ -1148,13 +1168,13 @@ class WanAttentionBlock(nn.Module):
                        audio_proj, audio_scale, num_latent_frames, nag_params, 
                        nag_context, is_uncond, multitalk_audio_embedding, x_ref_attn_map, human_num, 
                        inner_t, inner_c, cross_freqs, adapter_proj, ip_scale, mtv_freqs, mtv_motion_tokens, mtv_motion_rotary_emb, mtv_strength,
-                       humo_audio_input, humo_audio_scale):
+                       humo_audio_input, humo_audio_scale, lynx_x_ip, lynx_ip_scale):
 
             x = x + self.cross_attn(self.norm3(x), context, grid_sizes, clip_embed=clip_embed,
                                     audio_proj=audio_proj, audio_scale=audio_scale,
                                     num_latent_frames=num_latent_frames, nag_params=nag_params, nag_context=nag_context, is_uncond=is_uncond,
                                     rope_func=self.rope_func, inner_t=inner_t, inner_c=inner_c, cross_freqs=cross_freqs,
-                                    adapter_proj=adapter_proj, ip_scale=ip_scale, orig_seq_len=self.original_seq_len)
+                                    adapter_proj=adapter_proj, ip_scale=ip_scale, orig_seq_len=self.original_seq_len, lynx_x_ip=lynx_x_ip, lynx_ip_scale=lynx_ip_scale)
             # MultiTalk
             if multitalk_audio_embedding is not None and not isinstance(self, VaceWanAttentionBlock):
                 x_audio = self.audio_cross_attn(self.norm_x(x), encoder_hidden_states=multitalk_audio_embedding,
@@ -1502,6 +1522,8 @@ class WanModel(torch.nn.Module):
                 # WanAnimate
                 is_wananimate=False,
                 motion_encoder_dim=512,
+                # lynx
+                lynx_layers="none",
                 ):
         r"""
         Initialize the diffusion model backbone.
@@ -1669,7 +1691,7 @@ class WanModel(torch.nn.Module):
                                 qk_norm, cross_attn_norm, eps,
                                 attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function, 
                                 use_motion_attn=(i % 4 == 0 and use_motion_attn), use_humo_audio_attn=self.humo_audio,
-                                face_fuser_block = (i % 5 == 0 and is_wananimate))
+                                face_fuser_block = (i % 5 == 0 and is_wananimate), lynx_layers=lynx_layers, block_idx=i)
                 for i in range(num_layers)
             ])
         #MTV Crafter
@@ -2044,6 +2066,7 @@ class WanModel(torch.nn.Module):
         wananim_face_pixel_values=None,
         wananim_pose_strength=1.0,
         wananim_face_strength=1.0,
+        lynx_embeds=None,
 
     ):
         r"""
@@ -2088,6 +2111,14 @@ class WanModel(torch.nn.Module):
                 if isinstance(submodule, nn.Linear):
                     if hasattr(submodule, 'step'):
                         submodule.step = current_step
+
+        lynx_x_ip = None
+        if lynx_embeds is not None:
+            if not is_uncond:
+                lynx_x_ip = lynx_embeds["ip_x"].to(self.main_device)
+            else:
+                lynx_x_ip = lynx_embeds["ip_x_uncond"].to(self.main_device)
+            lynx_ip_scale = lynx_embeds.get("strength", 1.0)
 
         #s2v
         if self.model_type == 's2v' and s2v_audio_input is not None:
@@ -2574,6 +2605,8 @@ class WanModel(torch.nn.Module):
                 mtv_motion_tokens=mtv_motion_tokens, mtv_motion_rotary_emb=mtv_motion_rotary_emb, mtv_strength=mtv_strength, mtv_freqs=mtv_freqs,
                 humo_audio_input=humo_audio_input,
                 humo_audio_scale=humo_audio_scale,
+                lynx_x_ip=lynx_x_ip,
+                lynx_ip_scale=lynx_ip_scale,
             )
             
             if vace_data is not None:
