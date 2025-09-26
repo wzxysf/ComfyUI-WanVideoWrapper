@@ -52,8 +52,6 @@ class LoadLynxResampler:
         ).eval()
         resampler.to(offload_device, dtype)
         resampler.load_state_dict(resampler_sd, strict=True)
-        #for name, param in resampler.named_parameters():
-        #    print(f"{name}: {param.shape} {param.dtype}")
 
         return resampler,
 
@@ -91,13 +89,13 @@ class LynxEncodeFace:
         image_np = (image[0].numpy() * 255).astype(np.uint8)
         # Landmarks
         
-        landmarks = np.array([
-            [200.509, 213.98592],
-            [297.2495, 212.67685],
-            [245.74419, 272.85718],
-            [212.2043, 331.09564],
-            [288.75986, 330.27188]
-        ])
+        # landmarks = np.array([
+        #     [200.509, 213.98592],
+        #     [297.2495, 212.67685],
+        #     [245.74419, 272.85718],
+        #     [212.2043, 331.09564],
+        #     [288.75986, 330.27188]
+        # ])
 
         # landmarks = np.array([[379.35895, 381.4803],
         #                       [542.8676, 362.75436],
@@ -105,7 +103,7 @@ class LynxEncodeFace:
         #                       [407.03708, 555.56305],
         #                       [554.57874, 539.22833]])
 
-        #landmarks = get_landmarks_from_image(image_np)
+        landmarks = get_landmarks_from_image(image_np)
 
         print(landmarks)
 

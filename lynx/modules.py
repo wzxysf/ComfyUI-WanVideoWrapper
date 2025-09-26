@@ -29,8 +29,6 @@ class WanLynxIPCrossAttention(nn.Module):
     def forward(self, block, q, x, ip_x):
         b, n, d = x.size(0), block.num_heads, block.head_dim
 
-        print("ip_x.shape", ip_x.shape) #torch.Size([1, 16, 5120])
-
         if self.registers is not None:
             print("self.registers.shape", self.registers.shape) #torch.Size([1, 16, 5120])
             print("ip_x.shape", ip_x.shape) #torch.Size([1, 16, 5120])
