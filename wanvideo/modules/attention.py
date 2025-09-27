@@ -167,6 +167,7 @@ def attention(
     deterministic=False,
     dtype=torch.bfloat16,
     attention_mode='sdpa',
+    attn_mask=None,
 ):  
     if "flash" in attention_mode:
         if attention_mode == 'flash_attn_2':
@@ -190,8 +191,8 @@ def attention(
         )
     elif attention_mode == 'sdpa':
         if not (q.dtype == k.dtype == v.dtype):
-            return torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2).to(q.dtype), v.transpose(1, 2).to(q.dtype)).transpose(1, 2).contiguous()
-        return torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2).contiguous()
+            return torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2).to(q.dtype), v.transpose(1, 2).to(q.dtype), attn_mask=attn_mask).transpose(1, 2).contiguous()
+        return torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=attn_mask).transpose(1, 2).contiguous()
     elif attention_mode == 'sageattn_3':
         return sageattn_blackwell(
             q.transpose(1,2), 

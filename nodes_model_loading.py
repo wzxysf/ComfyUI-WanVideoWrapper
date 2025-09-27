@@ -550,9 +550,7 @@ class WanVideoVACEModelSelect:
     DESCRIPTION = "VACE model to use when not using model that has it included, loaded from 'ComfyUI/models/diffusion_models'"
 
     def getvacepath(self, vace_model):
-        vace_model = {
-            "path": folder_paths.get_full_path("diffusion_models", vace_model),
-        }
+        vace_model = [{"path": folder_paths.get_full_path("diffusion_models", vace_model)}]
         return (vace_model,)
     
 class WanVideoExtraModelSelect:

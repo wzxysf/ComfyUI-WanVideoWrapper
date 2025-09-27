@@ -615,11 +615,6 @@ class WanVideoSampler:
                 "end_percent": fantasy_portrait_embeds.get("end_percent", 1.0),
             }
 
-        # Lynx
-        lynx_embeds = image_embeds.get("lynx_embeds", None)
-        if lynx_embeds is not None:
-            log.info("Using Lynx embeddings", lynx_embeds)
-
         # MiniMax Remover
         minimax_latents = minimax_mask_latents = None
         minimax_latents = image_embeds.get("minimax_latents", None)
@@ -997,6 +992,33 @@ class WanVideoSampler:
         if transformer.vace_layers is not None:
             for block in transformer.vace_blocks:
                 block.rope_func = rope_function
+
+        # Lynx
+        lynx_ref_buffer = None
+        lynx_embeds = image_embeds.get("lynx_embeds", None)
+        if lynx_embeds is not None:
+            lynx_embeds = lynx_embeds.copy()
+            log.info("Using Lynx embeddings", lynx_embeds)
+            lynx_ref_latent = lynx_embeds.get("ref_latent", None)
+            lynx_ref_text_embed = lynx_embeds.get("ref_text_embed", None)
+
+            if lynx_ref_latent is not None:
+                lynx_ref_latent = lynx_ref_latent[0]
+                lynx_embeds["ref_feature_extractor"] = True
+                log.info(f"Lynx ref latent shape: {lynx_ref_latent.shape}")
+                log.info("Extracting Lynx ref buffer...")
+                lynx_ref_buffer = transformer(
+                    [lynx_ref_latent.to(device, dtype)],
+                    torch.tensor([0], device=device),
+                    lynx_ref_text_embed["prompt_embeds"],
+                    seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
+                    lynx_embeds=lynx_embeds
+                )
+                log.info(f"Extracted {len(lynx_ref_buffer)} ref buffers")
+                lynx_embeds["ref_feature_extractor"] = False
+                lynx_embeds["ref_latent"] = lynx_embeds["ref_text_embed"] = None
+                lynx_embeds["ref_buffer"] = lynx_ref_buffer
+                mm.soft_empty_cache()
 
         #region model pred
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None,

@@ -26,7 +26,6 @@
 
 import numpy as np
 import cv2
-from PIL import Image
 
 def estimate_norm(lmk, image_size=112, arcface_dst=None):
     from skimage import transform as trans
@@ -54,10 +53,9 @@ def get_arcface_dst(extend_face_crop=False, extend_ratio=0.8):
         arcface_dst = (arcface_dst - 112/2) * extend_ratio + 112/2
     return arcface_dst
 
-def align_face(image_pil, face_kpts, extend_face_crop=False, extend_ratio=0.8, face_size=112):
+def align_face(image, face_kpts, extend_face_crop=False, extend_ratio=0.8, face_size=112):
     arcface_dst = get_arcface_dst(extend_face_crop, extend_ratio)
     M = estimate_norm(face_kpts, face_size, arcface_dst)
-    image_cv2 = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+    image_cv2 = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     face_image_cv2 = cv2.warpAffine(image_cv2, M, (face_size, face_size), borderValue=0.0)
-    face_image = Image.fromarray(cv2.cvtColor(face_image_cv2, cv2.COLOR_BGR2RGB))
-    return face_image
+    return face_image_cv2

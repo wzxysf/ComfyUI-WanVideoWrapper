@@ -10,7 +10,7 @@ import comfy.model_management as mm
 from comfy.utils import load_torch_file
 import folder_paths
 
-script_directory = os.path.dirname(os.path.abspath(__file__)) 
+script_directory = os.path.dirname(os.path.abspath(__file__))
 device = mm.get_torch_device()
 offload_device = mm.unet_offload_device()
 
@@ -68,83 +68,104 @@ class VideoStyleInfo:  # key names should match those used in style.yaml file
     prompt: str = ''
     negative_prompt: str = ''
 
-class LynxEncodeFace:
+
+class LynxInsightFaceCrop:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE", {"tooltip": "Input images for the model"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "IMAGE",)
+    RETURN_NAMES = ("ip_image", "ref_image")
+    FUNCTION = "encode"
+    CATEGORY = "WanVideoWrapper"
+
+    def encode(self, image, image_size=112):
+        from .face.face_encoder import get_landmarks_from_image
+        from .face.face_utils import align_face
+        from insightface.utils import face_align
+
+        image_np = (image[0].numpy() * 255).astype(np.uint8)
+        # Landmarks
+
+        # landmarks = np.array([
+        #     [599.9878,  633.5308 ],
+        #     [893.5392,  642.8297 ],
+        #     [733.05945, 844.21454],
+        #     [640.42206, 970.78687],
+        #     [854.4849,  979.5486 ]
+        # ])
+        landmarks = get_landmarks_from_image(image_np)
+
+        print(landmarks)
+
+        in_image = np.array(image_np)
+        landmark = np.array(landmarks)
+
+        ip_face_aligned = face_align.norm_crop(in_image, landmark=landmark, image_size=112)
+        ref_face_aligned = align_face(in_image, landmark, extend_face_crop=True, face_size=256)
+
+        ip_face_aligned = torch.from_numpy(ip_face_aligned).unsqueeze(0).float() / 255.0
+        ref_face_aligned = torch.from_numpy(ref_face_aligned).unsqueeze(0).float() / 255.0
+
+        ip_face_aligned = (ip_face_aligned - ip_face_aligned.min()) / (ip_face_aligned.max() - ip_face_aligned.min())
+        ref_face_aligned = (ref_face_aligned - ref_face_aligned.min()) / (ref_face_aligned.max() - ref_face_aligned.min())
+        ref_face_aligned = ref_face_aligned[:, :,  :, [2, 1, 0]]  # BGR to RGB
+
+        return ip_face_aligned, ref_face_aligned
+
+
+class LynxEncodeFaceIP:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
                 "resampler": ("LYNXRESAMPLER", {"tooltip": "lynx resampler model"}),
-                "image": ("IMAGE", {"tooltip": "Input images for the model"}),
+                "ip_image": ("IMAGE", {"tooltip": "Input images for the model"}),
             },
         }
 
-    RETURN_TYPES = ("LYNXFACE", "IMAGE",)
-    RETURN_NAMES = ("lynx_face_embeds", "processed_image")
+    RETURN_TYPES = ("LYNXIP",)
+    RETURN_NAMES = ("lynx_face_embeds",)
     FUNCTION = "encode"
     CATEGORY = "WanVideoWrapper"
 
-    def encode(self, resampler, image):
-        from .face.face_encoder import FaceEncoderArcFace, get_landmarks_from_image
+    def encode(self, resampler, ip_image):
+        from .face.face_encoder import FaceEncoderArcFace
 
-        image_np = (image[0].numpy() * 255).astype(np.uint8)
-        # Landmarks
-        
-        # landmarks = np.array([
-        #     [200.509, 213.98592],
-        #     [297.2495, 212.67685],
-        #     [245.74419, 272.85718],
-        #     [212.2043, 331.09564],
-        #     [288.75986, 330.27188]
-        # ])
-
-        # landmarks = np.array([[379.35895, 381.4803],
-        #                       [542.8676, 362.75436],
-        #                       [451.62717, 467.9116],
-        #                       [407.03708, 555.56305],
-        #                       [554.57874, 539.22833]])
-
-        landmarks = get_landmarks_from_image(image_np)
-
-        print(landmarks)
+        image_in = ip_image.permute(0, 3, 1, 2).to(device) * 2 - 1  # to [-1, 1]
+        print("image_in.shape", image_in.shape) #torch.Size([1, 3, 112, 112])
 
         # Face embedding via ArcFace
         face_encoder = FaceEncoderArcFace()
         face_encoder.init_encoder_model(device)
-        arcface_embed, processed_image = face_encoder(image_np, need_proc=True, landmarks=landmarks)
+        arcface_embed = face_encoder(image_in).to(device, resampler.dtype)
 
-        arcface_embed = arcface_embed.to(device, resampler.dtype)
         arcface_embed = arcface_embed.reshape([1, -1, 512])
-
-        
 
         resampler.to(device)
         ip_x = resampler(arcface_embed)
         ip_x_uncond = resampler(arcface_embed * 0)
         resampler.to(offload_device)
 
-        #ip_x = torch.load(os.path.join(script_directory, "debug_face_embeds.pt"))
-        #ip_x = ip_x[1].unsqueeze(0)
         ip_x= ip_x.to(resampler.dtype)
 
         out_dict = {
             'ip_x': ip_x,
             'ip_x_uncond': ip_x_uncond,
-            "landmarks": landmarks,
         }
 
-        print("processed_image.shape", processed_image.min(), processed_image.max())
-        processed_image = (processed_image - processed_image.min()) / (processed_image.max() - processed_image.min())
-
-        processed_image = processed_image.permute(0, 2, 3, 1)
-       
-        return out_dict, processed_image
+        return out_dict,
 
 class DrawArcFaceLandmarks:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "lynx_face_embeds": ("LYNXFACE", {"tooltip": "lynx resampler model"}),
+                "lynx_face_embeds": ("LYNXIP", {"tooltip": "lynx resampler model"}),
                 "image": ("IMAGE", {"tooltip": "Input images for the model"}),
             },
             "optional": {
@@ -156,20 +177,17 @@ class DrawArcFaceLandmarks:
     RETURN_NAMES = ("landmarked_image", )
     FUNCTION = "draw"
     CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Draw face landmarks on an image for visualization/debugging"
 
     def draw(self, lynx_face_embeds, image):
         import cv2
         landmarks = lynx_face_embeds['landmarks']
         image_np = image[0].numpy() * 255
-        print("image_np.shape", image_np.shape) #image_np.shape (3, 512, 512)
-        print(type(landmarks))
-        print(landmarks)
 
         for (x, y) in landmarks:
             cv2.circle(image_np, (int(x), int(y)), radius=3, color=(0, 255, 0), thickness=-1)
 
         image_out = torch.from_numpy(image_np / 255).unsqueeze(0).float()
-        print(image_out.shape) #torch.Size([1, 3, 512, 512])
 
         return image_out,
 
@@ -178,10 +196,15 @@ class WanVideoAddLynxEmbeds:
     def INPUT_TYPES(s):
         return {"required": {
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "lynx_embeds": ("LYNXFACE", {"tooltip": "lynx face embeddings"}),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the MTV motion"}),
+                    "ip_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the ip adapter face feature"}),
+                    "ref_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the reference feature"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent to apply the ref "}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent to apply the ref "}),
+                },
+                "optional": {
+                    "lynx_ip_embeds": ("LYNXIP", {"tooltip": "lynx face embeddings"}),
+                    "ref_latent": ("LATENT",),
+                    "ref_text_embed": ("WANVIDEOTEXTEMBEDS",)
                 }
         }
 
@@ -190,11 +213,16 @@ class WanVideoAddLynxEmbeds:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, lynx_embeds, strength, start_percent, end_percent):
+    def add(self, embeds, ip_scale, ref_scale, start_percent, end_percent, lynx_ip_embeds=None, ref_latent=None, ref_text_embed=None):
+        if ref_latent is not None and ref_text_embed is None:
+            raise ValueError("If ref_latent is provided, ref_text_embed must also be provided.")
         new_entry = {
-            "ip_x": lynx_embeds["ip_x"],
-            "ip_x_uncond": lynx_embeds["ip_x_uncond"],
-            "strength": strength,
+            "ip_x": lynx_ip_embeds["ip_x"] if lynx_ip_embeds is not None else None,
+            "ip_x_uncond": lynx_ip_embeds["ip_x_uncond"] if lynx_ip_embeds is not None else None,
+            "ref_latent": ref_latent["samples"] if ref_latent is not None else None,
+            "ref_text_embed": ref_text_embed if ref_text_embed is not None else None,
+            "ip_scale": ip_scale,
+            "ref_scale": ref_scale,
             "start_percent": start_percent,
             "end_percent": end_percent,
         }
@@ -205,13 +233,15 @@ class WanVideoAddLynxEmbeds:
 
 NODE_CLASS_MAPPINGS = {
     "LoadLynxResampler": LoadLynxResampler,
-    "LynxEncodeFace": LynxEncodeFace,
+    "LynxEncodeFaceIP": LynxEncodeFaceIP,
     "DrawArcFaceLandmarks": DrawArcFaceLandmarks,
     "WanVideoAddLynxEmbeds": WanVideoAddLynxEmbeds,
+    "LynxInsightFaceCrop": LynxInsightFaceCrop,
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadLynxResampler": "Load Lynx Resampler",
-    "LynxEncodeFace": "Lynx Encode Face",
+    "LynxEncodeFaceIP": "Lynx Encode Face IP",
     "DrawArcFaceLandmarks": "Draw ArcFace Landmarks",
     "WanVideoAddLynxEmbeds": "WanVideo Add Lynx Embeds",
+    "LynxInsightFaceCrop": "Lynx InsightFace Crop",
 }

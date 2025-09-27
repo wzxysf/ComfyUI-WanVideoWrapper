@@ -2,14 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import torchvision.transforms as T
-
 import numpy as np
-
-from insightface.utils import face_align
-from insightface.app import FaceAnalysis
-#from facexlib.recognition import init_recognition_model
-
 
 __all__ = [
     "FaceEncoderArcFace",
@@ -30,6 +23,7 @@ def get_landmarks_from_image(image):
     Returns:
         5 2D keypoints, only one face will be returned.
     """
+    from insightface.app import FaceAnalysis
     global detector
     if detector is None:
         detector = FaceAnalysis()
@@ -74,7 +68,6 @@ class FaceEncoderArcFace():
     def __repr__(self):
         return "ArcFace"
 
-
     def init_encoder_model(self, device, eval_mode=True):
         self.device = device
         self.encoder_model = init_recognition_model('arcface', device=device)
@@ -82,33 +75,5 @@ class FaceEncoderArcFace():
         if eval_mode:
             self.encoder_model.eval()
 
-
-    @torch.no_grad()
-    def input_preprocessing(self, in_image, landmarks, image_size=112):
-        assert landmarks is not None, "landmarks are not provided!"
-
-        in_image = np.array(in_image)
-        landmark = np.array(landmarks)
-
-        face_aligned = face_align.norm_crop(in_image, landmark=landmark, image_size=image_size)
-
-        image_transform = T.Compose([
-            T.ToTensor(),
-            T.Normalize([0.5], [0.5]),
-        ])
-        face_aligned = image_transform(face_aligned).unsqueeze(0).to(self.device)
-
-        return face_aligned
-
-
-    @torch.no_grad()
-    def __call__(self, in_image, need_proc=False, landmarks=None, image_size=112):
-
-        if need_proc:
-            in_image = self.input_preprocessing(in_image, landmarks, image_size)
-        else:
-            assert isinstance(in_image, torch.Tensor)
-
-        image_embeds = self.encoder_model(in_image[:, [2, 1, 0], :, :].contiguous()) # [B, 512], normalized
-
-        return image_embeds, in_image
+    def __call__(self, in_image):
+        return self.encoder_model(in_image[:, [2, 1, 0], :, :].contiguous()) # [B, 512], normalized
