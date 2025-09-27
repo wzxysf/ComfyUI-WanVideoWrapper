@@ -10,6 +10,7 @@ from .wanvideo.modules.model import WanModel, LoRALinearLayer
 from .wanvideo.modules.t5 import T5EncoderModel
 from .wanvideo.modules.clip import CLIPModel
 from .wanvideo.wan_video_vae import WanVideoVAE, WanVideoVAE38
+from .custom_linear import _replace_linear
 
 from accelerate import init_empty_weights
 from .utils import set_module_tensor_to_device
@@ -1150,7 +1151,7 @@ class WanVideoModelLoader:
 
         #lynx
         lynx_layers = "none"
-        if "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd and "blocks.0.ref_adapter.to_k_ref.weight" in sd:
+        if "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd and "blocks.0.self_attn.ref_adapter.to_k_ref.weight" in sd:
             log.info("Lynx full model detected")
             n_registers = sd["blocks.0.cross_attn.ip_adapter.registers"].shape[1]
             lynx_layers = "full"
@@ -1418,27 +1419,26 @@ class WanVideoModelLoader:
                 del unianimate_sd
       
         if not gguf:
-            if lora is not None:
-                if merge_loras:
-                    if not lora_low_mem_load:
-                        load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
+            if lora is not None and merge_loras:
+                if not lora_low_mem_load:
+                    load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
+                
+                if control_lora:
+                    patch_control_lora(patcher.model.diffusion_model, device)
+                    patcher.model.is_patched = True   
                     
-                    if control_lora:
-                        patch_control_lora(patcher.model.diffusion_model, device)
-                        patcher.model.is_patched = True   
-                        
-                    log.info("Merging LoRA to the model...")
-                    patcher = apply_lora(
-                        patcher, device, transformer_load_device, params_to_keep=params_to_keep, dtype=weight_dtype, base_dtype=base_dtype, state_dict=sd, 
-                        low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights)
-                    if not control_lora:
-                        scale_weights.clear()
-                        patcher.patches.clear()
-                    transformer.patched_linear = False
-                    sd = None
-                else:
-                    from .custom_linear import _replace_linear
-                    transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
+                log.info("Merging LoRA to the model...")
+                patcher = apply_lora(
+                    patcher, device, transformer_load_device, params_to_keep=params_to_keep, dtype=weight_dtype, base_dtype=base_dtype, state_dict=sd, 
+                    low_mem_load=lora_low_mem_load, control_lora=control_lora, scale_weights=scale_weights)
+                if not control_lora:
+                    scale_weights.clear()
+                    patcher.patches.clear()
+                transformer.patched_linear = False
+                sd = None
+            elif "scaled" in quantization:
+                transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
+                transformer.patched_linear = True
             else:
                 load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
                 transformer.patched_linear = False
