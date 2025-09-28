@@ -1014,10 +1014,21 @@ class WanVideoSampler:
                     seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
                     lynx_embeds=lynx_embeds
                 )
+                if not math.isclose(cfg[0], 1.0):
+                    lynx_ref_buffer_uncond = transformer(
+                        [lynx_ref_latent.to(device, dtype) * 0],
+                        torch.tensor([0], device=device),
+                        lynx_ref_text_embed["prompt_embeds"],
+                        seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
+                        lynx_embeds=lynx_embeds,
+                        is_uncond=True
+                    )
+
                 log.info(f"Extracted {len(lynx_ref_buffer)} ref buffers")
                 lynx_embeds["ref_feature_extractor"] = False
                 lynx_embeds["ref_latent"] = lynx_embeds["ref_text_embed"] = None
                 lynx_embeds["ref_buffer"] = lynx_ref_buffer
+                lynx_embeds["ref_buffer_uncond"] = lynx_ref_buffer_uncond if not math.isclose(cfg[0], 1.0) else None
                 mm.soft_empty_cache()
 
         #region model pred

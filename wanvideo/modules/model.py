@@ -2114,13 +2114,15 @@ class WanModel(torch.nn.Module):
             if (lynx_embeds['start_percent'] <= current_step_percentage <= lynx_embeds['end_percent']) and not lynx_ref_feature_extractor:
                 if not is_uncond:
                     lynx_x_ip = lynx_embeds.get("ip_x", None)
+                    lynx_ref_buffer = lynx_embeds.get("ref_buffer", None)
                 else:
                     lynx_x_ip = lynx_embeds.get("ip_x_uncond", None)
+                    lynx_ref_buffer = lynx_embeds.get("ref_buffer_uncond", None)
                 lynx_x_ip = lynx_x_ip.to(self.main_device) if lynx_x_ip is not None else None
 
                 lynx_ip_scale = lynx_embeds.get("ip_scale", 1.0)
                 lynx_ref_scale = lynx_embeds.get("ref_scale", 1.0)
-                lynx_ref_buffer = lynx_embeds.get("ref_buffer", None)
+                
 
         #s2v
         if self.model_type == 's2v' and s2v_audio_input is not None:
