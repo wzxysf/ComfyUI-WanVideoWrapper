@@ -35,7 +35,7 @@ except Exception as e:
     sageattn_func = None
 
 try:
-    from sageattn import sageattn_blackwell
+    from sageattn3 import sageattn3_blackwell as sageattn_blackwell
 except:
     SAGE3_AVAILABLE = False
 
