@@ -1000,10 +1000,15 @@ class WanVideoSampler:
             lynx_embeds = lynx_embeds.copy()
             log.info("Using Lynx embeddings", lynx_embeds)
             lynx_ref_latent = lynx_embeds.get("ref_latent", None)
+            lynx_ref_latent_uncond = lynx_embeds.get("ref_latent_uncond", None)
             lynx_ref_text_embed = lynx_embeds.get("ref_text_embed", None)
+            lynx_cfg_scale = lynx_embeds.get("cfg_scale", 1.0)
+            if not isinstance(lynx_cfg_scale, list):
+                lynx_cfg_scale = [lynx_cfg_scale] * (steps + 1)
 
             if lynx_ref_latent is not None:
                 lynx_ref_latent = lynx_ref_latent[0]
+                lynx_ref_latent_uncond = lynx_ref_latent_uncond[0]
                 lynx_embeds["ref_feature_extractor"] = True
                 log.info(f"Lynx ref latent shape: {lynx_ref_latent.shape}")
                 log.info("Extracting Lynx ref buffer...")
@@ -1016,7 +1021,7 @@ class WanVideoSampler:
                 )
                 if not math.isclose(cfg[0], 1.0):
                     lynx_ref_buffer_uncond = transformer(
-                        [lynx_ref_latent.to(device, dtype) * 0],
+                        [lynx_ref_latent_uncond.to(device, dtype)],
                         torch.tensor([0], device=device),
                         lynx_ref_text_embed["prompt_embeds"],
                         seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
@@ -1349,6 +1354,8 @@ class WanVideoSampler:
 
                         #phantom
                         if use_phantom and not math.isclose(phantom_cfg_scale[idx], 1.0):
+                            if cache_state is not None and len(cache_state) != 3:
+                                cache_state.append(None)
                             noise_pred_phantom, cache_state_phantom = transformer(
                             context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
                             **base_params)
@@ -1369,9 +1376,9 @@ class WanVideoSampler:
                                 else:  # multitalk
                                     base_params['multitalk_audio'] = torch.zeros_like(multitalk_audio_input)[-1:]
                                     audio_context = negative_embeds
-
+                                base_params['is_uncond'] = False
                                 noise_pred_no_audio, cache_state_audio = transformer(
-                                    context=audio_context, is_uncond=False,
+                                    context=audio_context,
                                     pred_id=cache_state[2] if cache_state else None,
                                     vace_data=vace_data,
                                     **base_params)
@@ -1380,6 +1387,18 @@ class WanVideoSampler:
                                     + cfg_scale * (noise_pred_no_audio[0] - noise_pred_uncond)
                                     + audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_no_audio[0]))
                                 return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_audio]
+                        #lynx
+                        if lynx_embeds is not None and not math.isclose(lynx_cfg_scale[idx], 1.0):
+                            base_params['is_uncond'] = False
+                            if cache_state is not None and len(cache_state) != 3:
+                                cache_state.append(None)
+                            noise_pred_lynx, cache_state_lynx = transformer(
+                            context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
+                            **base_params)
+
+                            noise_pred = (noise_pred_uncond + lynx_cfg_scale[idx] * (noise_pred_lynx[0] - noise_pred_uncond)
+                                          + cfg_scale * (noise_pred_cond - noise_pred_lynx[0]))
+                            return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_lynx]
 
                     #batched
                     else:

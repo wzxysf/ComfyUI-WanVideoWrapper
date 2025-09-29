@@ -198,12 +198,14 @@ class WanVideoAddLynxEmbeds:
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
                     "ip_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the ip adapter face feature"}),
                     "ref_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the reference feature"}),
+                    "lynx_cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "If above 1.0 and main cfg_scale is above 1.0, run extra pass, default value 2.0"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent to apply the ref "}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent to apply the ref "}),
                 },
                 "optional": {
+                    "vae": ("WANVAE", {"tooltip": "VAE model, only needed if ref_image is provided"}),
                     "lynx_ip_embeds": ("LYNXIP", {"tooltip": "lynx face embeddings"}),
-                    "ref_latent": ("LATENT",),
+                    "ref_image": ("IMAGE",),
                     "ref_text_embed": ("WANVIDEOTEXTEMBEDS",)
                 }
         }
@@ -213,16 +215,25 @@ class WanVideoAddLynxEmbeds:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, ip_scale, ref_scale, start_percent, end_percent, lynx_ip_embeds=None, ref_latent=None, ref_text_embed=None):
-        if ref_latent is not None and ref_text_embed is None:
-            raise ValueError("If ref_latent is provided, ref_text_embed must also be provided.")
+    def add(self, embeds, ip_scale, ref_scale, start_percent, end_percent, lynx_cfg_scale, vae=None, lynx_ip_embeds=None, ref_image=None, ref_text_embed=None):
+        if ref_image is not None and ref_text_embed is None:
+            raise ValueError("If ref_image is provided, ref_text_embed must also be provided.")
+        if ref_image is not None:
+            vae.to(device)
+            ref_image_in = (ref_image[..., :3].permute(3, 0, 1, 2) * 2 - 1).to(device, vae.dtype)
+            ref_latent = vae.encode([ref_image_in], device, tiled=False)
+            ref_latent_uncond = vae.encode([torch.zeros_like(ref_image_in)], device, tiled=False)
+            vae.to(offload_device)
+            
         new_entry = {
             "ip_x": lynx_ip_embeds["ip_x"] if lynx_ip_embeds is not None else None,
             "ip_x_uncond": lynx_ip_embeds["ip_x_uncond"] if lynx_ip_embeds is not None else None,
-            "ref_latent": ref_latent["samples"] if ref_latent is not None else None,
+            "ref_latent": ref_latent if ref_image is not None else None,
+            "ref_latent_uncond": ref_latent_uncond if ref_image is not None else None,
             "ref_text_embed": ref_text_embed if ref_text_embed is not None else None,
             "ip_scale": ip_scale,
             "ref_scale": ref_scale,
+            "cfg_scale": lynx_cfg_scale,
             "start_percent": start_percent,
             "end_percent": end_percent,
         }
