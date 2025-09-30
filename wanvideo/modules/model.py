@@ -961,39 +961,25 @@ class WanAttentionBlock(nn.Module):
 
     #region attention forward
     def forward(
-        self,
-        x,
-        e,
-        seq_lens,
-        grid_sizes,
-        freqs,
-        context,
-        current_step,
+        self, x, e, seq_lens, grid_sizes, freqs, context, current_step,
         last_step=False,
         video_attention_split_steps=[],
         clip_embed=None,
-        camera_embed=None,
-        audio_proj=None,
-        audio_scale=1.0,
+        camera_embed=None, #ReCamMaster
+        audio_proj=None, audio_scale=1.0, #fantasytalking
         num_latent_frames=21,
         original_seq_len=None,
-        enhance_enabled=False,
-        nag_params={},
-        nag_context=None,
+        enhance_enabled=False, #feta
+        nag_params={}, nag_context=None, #normalized attention guidance
         is_uncond=False,
-        multitalk_audio_embedding=None,
-        ref_target_masks=None,
-        human_num=0,
-        inner_t=None, inner_c=None,
-        cross_freqs=None,
-        x_ip=None, e_ip=None,
-        freqs_ip=None,
-        adapter_proj=None,
-        ip_scale=1.0,
+        multitalk_audio_embedding=None, ref_target_masks=None, human_num=0, #multitalk
+        inner_t=None, inner_c=None, cross_freqs=None, #echoshot
+        x_ip=None, e_ip=None, freqs_ip=None, ip_scale=1.0, #stand-in
+        adapter_proj=None, #fantasyportrait
         reverse_time=False,
-        mtv_motion_tokens=None, mtv_motion_rotary_emb=None, mtv_strength=1.0, mtv_freqs=None,
-        humo_audio_input=None, humo_audio_scale=1.0,
-        lynx_x_ip=None, lynx_ref_feature=None, lynx_ip_scale=1.0, lynx_ref_scale=1.0,
+        mtv_motion_tokens=None, mtv_motion_rotary_emb=None, mtv_strength=1.0, mtv_freqs=None, #mtv crafter
+        humo_audio_input=None, humo_audio_scale=1.0, #humo audio
+        lynx_x_ip=None, lynx_ref_feature=None, lynx_ip_scale=1.0, lynx_ref_scale=1.0, #lynx
     ):
         r"""
         Args:
@@ -1651,6 +1637,8 @@ class WanModel(torch.nn.Module):
         self.humo_audio = humo_audio
 
         self.motion_encoder_dim = motion_encoder_dim
+
+        self.base_dtype = dtype
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -2330,7 +2318,7 @@ class WanModel(torch.nn.Module):
         if self.zero_timestep:
             t = torch.cat([t, torch.zeros([1], dtype=t.dtype, device=t.device)])
 
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(x.dtype))  # b, dim
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(self.time_embedding[0].weight.dtype))  # b, dim
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))  # b, 6, dim
 
         #S2V zero timestep
@@ -2346,7 +2334,7 @@ class WanModel(torch.nn.Module):
 
         if x_ip is not None:
             timestep_ip = torch.zeros_like(t)  # [B] with 0s
-            t_ip = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep_ip.flatten()).to(x.dtype))  # b, dim )
+            t_ip = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep_ip.flatten()).to(self.time_embedding[0].weight.dtype))  # b, dim )
             e0_ip = self.time_projection(t_ip).unflatten(1, (6, self.dim))
 
         if fps_embeds is not None:
@@ -2387,7 +2375,7 @@ class WanModel(torch.nn.Module):
                     torch.cat(
                         [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                     for u in context
-                ]).to(x.dtype))
+                ]).to(self.text_embedding[0].weight.dtype))
             
             # NAG
             if nag_context is not None:
@@ -2396,7 +2384,7 @@ class WanModel(torch.nn.Module):
                     torch.cat(
                         [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                     for u in nag_context
-                ]).to(x.dtype))
+                ]).to(self.text_embedding[0].weight.dtype))
             
             if self.offload_txt_emb:
                 self.text_embedding.to(self.offload_device, non_blocking=self.use_non_blocking)
@@ -2567,6 +2555,8 @@ class WanModel(torch.nn.Module):
                 else:
                     should_calc = True
 
+        x = x.to(self.base_dtype)
+
         if self.enable_easycache:
             original_x = x.clone().to(self.cache_device)
         if should_calc:
@@ -2661,12 +2651,11 @@ class WanModel(torch.nn.Module):
             # lynx ref
             if lynx_ref_buffer is None and lynx_ref_feature_extractor:
                 lynx_ref_buffer = {}
-                print("Lynx reference feature extractor enabled.")
 
             for b, block in enumerate(self.blocks):
                 block_idx = f"{b:02d}"
                 if lynx_ref_buffer is not None and not lynx_ref_feature_extractor:
-                    print("reading from lynx ref buffer for block", block_idx)
+                    #print("reading from lynx ref buffer for block", block_idx)
                     lynx_ref_feature = lynx_ref_buffer.get(block_idx, None)
                 else:
                     lynx_ref_feature = None
