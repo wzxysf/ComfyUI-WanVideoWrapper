@@ -2144,7 +2144,7 @@ class WanModel(torch.nn.Module):
         
         #uni3c controlnet
         if uni3c_data is not None:
-            render_latent = uni3c_data["render_latent"].to(x[0].dtype)
+            render_latent = uni3c_data["render_latent"].to(self.base_dtype)
             hidden_states = x[0].unsqueeze(0).clone().float()
             if hidden_states.shape[1] == 16: #T2V work around
                 hidden_states = torch.cat([hidden_states, torch.zeros_like(hidden_states[:, :4])], dim=1)
@@ -2167,14 +2167,14 @@ class WanModel(torch.nn.Module):
         # WanAnimate
         motion_vec = None
         if wananim_face_pixel_values is not None:
-            motion_vec = self.wananimate_face_embedding(wananim_face_pixel_values).to(x[0].dtype)
+            motion_vec = self.wananimate_face_embedding(wananim_face_pixel_values).to(self.base_dtype)
 
         if wananim_pose_latents is not None:
             x = self.wananimate_pose_embedding(x, wananim_pose_latents, strength=wananim_pose_strength)
 
         # s2v pose embedding
         if s2v_pose is not None:
-            x[0] = x[0] + self.cond_encoder(s2v_pose.to(self.cond_encoder.weight.dtype)).to(x[0].dtype)
+            x[0] = x[0] + self.cond_encoder(s2v_pose.to(self.cond_encoder.weight.dtype)).to(self.base_dtype)
 
         # Fun camera
         if self.control_adapter is not None and fun_camera is not None:
