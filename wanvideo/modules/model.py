@@ -917,7 +917,7 @@ class WanAttentionBlock(nn.Module):
     #@torch.compiler.disable()
     def get_mod(self, e):
         if e.dim() == 3:
-            return (self.modulation  + e).chunk(6, dim=1) # 1, 6, dim
+            return (self.modulation + e).chunk(6, dim=1) # 1, 6, dim
         elif e.dim() == 4:
             e_mod = self.modulation.unsqueeze(2) + e
             return [ei.squeeze(1) for ei in e_mod.unbind(dim=1)]
@@ -2556,6 +2556,7 @@ class WanModel(torch.nn.Module):
                     should_calc = True
 
         x = x.to(self.base_dtype)
+        e0 = e0.to(self.base_dtype)
 
         if self.enable_easycache:
             original_x = x.clone().to(self.cache_device)

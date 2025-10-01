@@ -860,11 +860,13 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         if gguf and isinstance(param, GGUFParameter):
             continue
 
+        value=sd[name.replace("_orig_mod.", "")]
+
         if gguf:
             dtype_to_use = torch.float32 if "patch_embedding" in name or "motion_encoder" in name else base_dtype
         else:
             dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
-            dtype_to_use = weight_dtype if sd[name.replace("_orig_mod.", "")].dtype == weight_dtype else dtype_to_use
+            dtype_to_use = weight_dtype if value.dtype == weight_dtype else dtype_to_use
             if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
                 dtype_to_use = base_dtype
             if "patch_embedding" in name or "motion_encoder" in name:
@@ -880,7 +882,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
                 if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args.get("vace_blocks_to_swap", 0):
                     load_device = offload_device
         # Set tensor to device
-        set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=sd[name.replace("_orig_mod.", "")])
+        set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=value)
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
@@ -1434,13 +1436,9 @@ class WanVideoModelLoader:
                     patcher.patches.clear()
                 transformer.patched_linear = False
                 sd = None
-            elif "scaled" in quantization:
+            elif "scaled" in quantization or lora is not None:
                 transformer = _replace_linear(transformer, base_dtype, sd, scale_weights=scale_weights)
                 transformer.patched_linear = True
-            else:
-                load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
-                transformer.patched_linear = False
-                sd = None
 
         if "fast" in quantization:
             if lora is not None and not merge_loras:
