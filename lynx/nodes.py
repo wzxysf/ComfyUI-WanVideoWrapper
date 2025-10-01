@@ -221,8 +221,8 @@ class WanVideoAddLynxEmbeds:
         if ref_image is not None:
             vae.to(device)
             ref_image_in = (ref_image[..., :3].permute(3, 0, 1, 2) * 2 - 1).to(device, vae.dtype)
-            ref_latent = vae.encode([ref_image_in], device, tiled=False)
-            ref_latent_uncond = vae.encode([torch.zeros_like(ref_image_in)], device, tiled=False)
+            ref_latent = vae.encode([ref_image_in], device, tiled=False, sample=True)
+            ref_latent_uncond = vae.encode([torch.zeros_like(ref_image_in)], device, tiled=False, sample=True)
             vae.to(offload_device)
             
         new_entry = {

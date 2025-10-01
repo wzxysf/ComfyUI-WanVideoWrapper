@@ -1035,6 +1035,8 @@ class WanVideoSampler:
                     )
                     log.info(f"Extracted {len(lynx_ref_buffer_uncond)} uncond ref buffers")
 
+                lynx_embeds["ip_x"] = lynx_embeds["ip_x"].to(device, dtype)
+                lynx_embeds["ip_x_uncond"] = lynx_embeds["ip_x_uncond"].to(device, dtype)
                 lynx_embeds["ref_feature_extractor"] = False
                 lynx_embeds["ref_latent"] = lynx_embeds["ref_text_embed"] = None
                 lynx_embeds["ref_buffer"] = lynx_ref_buffer

@@ -442,10 +442,13 @@ class WanSelfAttention(nn.Module):
         if attention_mode_override is not None:
             attention_mode = attention_mode_override
 
+        if self.ref_adapter is not None and lynx_ref_feature is not None:
+            ref_x = self.ref_adapter(self, q, lynx_ref_feature)
+
         x = attention(q, k, v, k_lens=seq_lens, attention_mode=attention_mode)
 
         if self.ref_adapter is not None and lynx_ref_feature is not None:
-            x = x.add(self.ref_adapter(self, q, lynx_ref_feature), alpha=lynx_ref_scale)
+            x = x.add(ref_x, alpha=lynx_ref_scale)
 
         # output
         return self.o(x.flatten(2))
@@ -2150,7 +2153,7 @@ class WanModel(torch.nn.Module):
                 hidden_states = torch.cat([hidden_states, torch.zeros_like(hidden_states[:, :4])], dim=1)
             render_latent = torch.cat([hidden_states[:, :20], render_latent], dim=1)
 
-        # embeddings
+        # patch embed
         if control_lora_enabled:
             self.expanded_patch_embedding.to(device)
             x = [
