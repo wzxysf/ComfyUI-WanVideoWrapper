@@ -206,7 +206,8 @@ class WanVideoAddLynxEmbeds:
                     "vae": ("WANVAE", {"tooltip": "VAE model, only needed if ref_image is provided"}),
                     "lynx_ip_embeds": ("LYNXIP", {"tooltip": "lynx face embeddings"}),
                     "ref_image": ("IMAGE",),
-                    "ref_text_embed": ("WANVIDEOTEXTEMBEDS",)
+                    "ref_text_embed": ("WANVIDEOTEXTEMBEDS",),
+                    "ref_blocks_to_use": ("STRING", {"default": "", "forceInput": True, "tooltip": "Comma-separated list of block indices and ranges to use for reference feature, e.g. '0-20, 25, 28, 35-39'. If empty, use all blocks."}),
                 }
         }
 
@@ -215,7 +216,7 @@ class WanVideoAddLynxEmbeds:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, ip_scale, ref_scale, start_percent, end_percent, lynx_cfg_scale, vae=None, lynx_ip_embeds=None, ref_image=None, ref_text_embed=None):
+    def add(self, embeds, ip_scale, ref_scale, start_percent, end_percent, lynx_cfg_scale, vae=None, lynx_ip_embeds=None, ref_image=None, ref_text_embed=None, ref_blocks_to_use=""):
         if ref_image is not None and ref_text_embed is None:
             raise ValueError("If ref_image is provided, ref_text_embed must also be provided.")
         if ref_image is not None:
@@ -224,6 +225,28 @@ class WanVideoAddLynxEmbeds:
             ref_latent = vae.encode([ref_image_in], device, tiled=False, sample=True)
             ref_latent_uncond = vae.encode([torch.zeros_like(ref_image_in)], device, tiled=False, sample=True)
             vae.to(offload_device)
+        if ref_blocks_to_use.strip() == "":
+            ref_blocks_to_use = None
+        else:
+            # Parse comma-separated blocks and ranges
+            blocks = []
+            for item in ref_blocks_to_use.split(","):
+                item = item.strip()
+                if "-" in item and not item.startswith("-"):
+                    # Handle range like "0-20" or "35-39"
+                    try:
+                        start, end = item.split("-", 1)
+                        start, end = int(start.strip()), int(end.strip())
+                        blocks.extend(list(range(start, end + 1)))
+                    except ValueError:
+                        print(f"Invalid range format: {item}")
+                elif item.isdigit():
+                    # Handle single number
+                    blocks.append(int(item))
+                else:
+                    print(f"Invalid block specification: {item}")
+            ref_blocks_to_use = sorted(list(set(blocks)))  # Remove duplicates and sort
+            print("Using ref blocks:", ref_blocks_to_use)
             
         new_entry = {
             "ip_x": lynx_ip_embeds["ip_x"] if lynx_ip_embeds is not None else None,
@@ -236,6 +259,7 @@ class WanVideoAddLynxEmbeds:
             "cfg_scale": lynx_cfg_scale,
             "start_percent": start_percent,
             "end_percent": end_percent,
+            "ref_blocks_to_use": ref_blocks_to_use,
         }
 
         updated = dict(embeds)

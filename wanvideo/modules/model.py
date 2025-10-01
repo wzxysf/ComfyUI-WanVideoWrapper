@@ -2102,6 +2102,8 @@ class WanModel(torch.nn.Module):
         lynx_ip_scale = lynx_ref_scale = 1.0
         if lynx_embeds is not None:
             lynx_ref_feature_extractor = lynx_embeds.get("ref_feature_extractor", False)
+            lynx_ref_blocks_to_use = lynx_embeds.get("ref_blocks_to_use", [list(range(len(self.blocks)))])
+            print(f"Using Lynx ref feature extractor: {lynx_ref_feature_extractor}, blocks: {lynx_ref_blocks_to_use}")
             if (lynx_embeds['start_percent'] <= current_step_percentage <= lynx_embeds['end_percent']) and not lynx_ref_feature_extractor:
                 if not is_uncond:
                     lynx_x_ip = lynx_embeds.get("ip_x", None)
@@ -2659,8 +2661,9 @@ class WanModel(torch.nn.Module):
             for b, block in enumerate(self.blocks):
                 block_idx = f"{b:02d}"
                 if lynx_ref_buffer is not None and not lynx_ref_feature_extractor:
-                    #print("reading from lynx ref buffer for block", block_idx)
                     lynx_ref_feature = lynx_ref_buffer.get(block_idx, None)
+                    if lynx_ref_feature is not None:
+                        print("loading from lynx ref buffer for block", block_idx)
                 else:
                     lynx_ref_feature = None
                 # Prefetch blocks if enabled
@@ -2707,8 +2710,9 @@ class WanModel(torch.nn.Module):
                     log.info(f"Block {b}: transfer_time={transfer_time:.4f}s, compute_time={compute_time:.4f}s, to_cpu_transfer_time={to_cpu_transfer_time:.4f}s")
                 # lynx ref
                 if lynx_ref_feature_extractor:
-                    print("storing to lynx ref buffer for block", block_idx)
-                    lynx_ref_buffer[block_idx] = lynx_ref_feature
+                    if b in lynx_ref_blocks_to_use:
+                        print("storing to lynx ref buffer for block", block_idx)
+                        lynx_ref_buffer[block_idx] = lynx_ref_feature
                 #uni3c controlnet
                 if uni3c_controlnet_states is not None and b < len(uni3c_controlnet_states):
                     x[:, :self.original_seq_len] += uni3c_controlnet_states[b].to(x) * uni3c_data["controlnet_weight"]
