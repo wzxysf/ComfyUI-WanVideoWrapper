@@ -2104,7 +2104,7 @@ class WanModel(torch.nn.Module):
             lynx_ref_feature_extractor = lynx_embeds.get("ref_feature_extractor", False)
             lynx_ref_blocks_to_use = lynx_embeds.get("ref_blocks_to_use", None)
             if lynx_ref_blocks_to_use is None:
-                lynx_ref_blocks_to_use = [list(range(len(self.blocks)))]
+                lynx_ref_blocks_to_use = list(range(len(self.blocks)))
             print(f"Using Lynx ref feature extractor: {lynx_ref_feature_extractor}, blocks: {lynx_ref_blocks_to_use}")
             if (lynx_embeds['start_percent'] <= current_step_percentage <= lynx_embeds['end_percent']) and not lynx_ref_feature_extractor:
                 if not is_uncond:
