@@ -531,6 +531,8 @@ class WanVideoLoraSelectMulti:
                 "low_mem_load": low_mem_load,
                 "merge_loras": merge_loras,
             })
+        if len(loras_list) == 0:
+            return None,
         return (loras_list,)
     
 class WanVideoVACEModelSelect:
