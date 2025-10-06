@@ -1309,11 +1309,12 @@ class BaseWanAttentionBlock(WanAttentionBlock):
         attention_mode='sdpa',
         rope_func="comfy",
         rms_norm_function="default",
-        lynx_layers="none"
+        lynx_ip_layers=None,
+        lynx_ref_layers=None,
     ):
         super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, 
                          cross_attn_norm, eps, attention_mode, rope_func, rms_norm_function=rms_norm_function,
-                         block_idx=block_idx, lynx_layers=lynx_layers)
+                         block_idx=block_idx, lynx_ip_layers=lynx_ip_layers, lynx_ref_layers=lynx_ref_layers)
         self.block_id = block_id
 
     def forward(self, x, vace_hints=None, vace_context_scale=[1.0], **kwargs):
