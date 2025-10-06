@@ -7,7 +7,7 @@ from PIL import Image
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
 from .wanvideo.modules.model import rope_params
-from .custom_linear import remove_lora_from_module, set_lora_params
+from .custom_linear import remove_lora_from_module, set_lora_params, _replace_linear
 from .wanvideo.schedulers import get_scheduler, get_sampling_sigmas, retrieve_timesteps, scheduler_list
 from .gguf.gguf import set_lora_params_gguf
 from .multitalk.multitalk import timestep_transform, add_noise
@@ -186,6 +186,9 @@ class WanVideoSampler:
         vae_upscale_factor = 16 if is_5b else 8
 
         # Load weights
+        if not transformer.patched_linear and patcher.model["sd"] is not None and len(patcher.patches) != 0:
+            transformer = _replace_linear(transformer, dtype, patcher.model["sd"])
+            transformer.patched_linear = True
         if transformer.patched_linear and gguf_reader is None:
             load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
 
@@ -193,7 +196,7 @@ class WanVideoSampler:
             load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
             set_lora_params_gguf(transformer, patcher.patches)
             transformer.patched_linear = True
-        elif len(patcher.patches) != 0 and transformer.patched_linear: #handle patched linear layers (unmerged loras, fp8 scaled)
+        elif len(patcher.patches) != 0: #handle patched linear layers (unmerged loras, fp8 scaled)
             log.info(f"Using {len(patcher.patches)} LoRA weight patches for WanVideo model")
             if not merge_loras and fp8_matmul:
                 raise NotImplementedError("FP8 matmul with unmerged LoRAs is not supported")
@@ -996,6 +999,59 @@ class WanVideoSampler:
             for block in transformer.vace_blocks:
                 block.rope_func = rope_function
 
+        # Lynx
+        lynx_ref_buffer = None
+        lynx_embeds = image_embeds.get("lynx_embeds", None)
+        if lynx_embeds is not None:
+            if lynx_embeds.get("ip_x", None) is not None:
+                if transformer.blocks[0].cross_attn.ip_adapter is None:
+                    raise ValueError("Lynx IP embeds provided, but the no lynx ip adapter layers found in the model.")
+            lynx_embeds = lynx_embeds.copy()
+            log.info("Using Lynx embeddings", lynx_embeds)
+            lynx_ref_latent = lynx_embeds.get("ref_latent", None)
+            lynx_ref_latent_uncond = lynx_embeds.get("ref_latent_uncond", None)
+            lynx_ref_text_embed = lynx_embeds.get("ref_text_embed", None)
+            lynx_cfg_scale = lynx_embeds.get("cfg_scale", 1.0)
+            if not isinstance(lynx_cfg_scale, list):
+                lynx_cfg_scale = [lynx_cfg_scale] * (steps + 1)
+
+            if lynx_ref_latent is not None:
+                if transformer.blocks[0].self_attn.ref_adapter is None:
+                    raise ValueError("Lynx reference provided, but the no lynx reference adapter layers found in the model.")
+                lynx_ref_latent = lynx_ref_latent[0]
+                lynx_ref_latent_uncond = lynx_ref_latent_uncond[0]
+                lynx_embeds["ref_feature_extractor"] = True
+                log.info(f"Lynx ref latent shape: {lynx_ref_latent.shape}")
+                log.info("Extracting Lynx ref cond buffer...")
+                lynx_ref_buffer = transformer(
+                    [lynx_ref_latent.to(device, dtype)],
+                    torch.tensor([0], device=device),
+                    lynx_ref_text_embed["prompt_embeds"],
+                    seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
+                    lynx_embeds=lynx_embeds
+                )
+                log.info(f"Extracted {len(lynx_ref_buffer)} cond ref buffers")
+                if not math.isclose(cfg[0], 1.0):
+                    log.info("Extracting Lynx ref uncond buffer...")
+                    lynx_ref_buffer_uncond = transformer(
+                        [lynx_ref_latent_uncond.to(device, dtype)],
+                        torch.tensor([0], device=device),
+                        lynx_ref_text_embed["prompt_embeds"],
+                        seq_len=math.ceil((lynx_ref_latent.shape[2] * lynx_ref_latent.shape[3]) / 4 * lynx_ref_latent.shape[1]),
+                        lynx_embeds=lynx_embeds,
+                        is_uncond=True
+                    )
+                    log.info(f"Extracted {len(lynx_ref_buffer_uncond)} uncond ref buffers")
+                
+            if lynx_embeds.get("ip_x", None) is not None:
+                lynx_embeds["ip_x"] = lynx_embeds["ip_x"].to(device, dtype)
+                lynx_embeds["ip_x_uncond"] = lynx_embeds["ip_x_uncond"].to(device, dtype)
+            lynx_embeds["ref_feature_extractor"] = False
+            lynx_embeds["ref_latent"] = lynx_embeds["ref_text_embed"] = None
+            lynx_embeds["ref_buffer"] = lynx_ref_buffer
+            lynx_embeds["ref_buffer_uncond"] = lynx_ref_buffer_uncond if not math.isclose(cfg[0], 1.0) else None
+            mm.soft_empty_cache()
+
         #region model pred
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None,
                              control_latents=None, vace_data=None, unianim_data=None, audio_proj=None, control_camera_latents=None,
@@ -1004,7 +1060,7 @@ class WanVideoSampler:
                              humo_image_cond=None, humo_image_cond_neg=None, humo_audio=None, humo_audio_neg=None, wananim_pose_latents=None,
                              wananim_face_pixels=None, uni3c_data=None,):
             nonlocal transformer
-            z = z.to(dtype)
+            #z = z.to(dtype)
             autocast_enabled = ("fp8" in model["quantization"] and not transformer.patched_linear)
             with torch.autocast(device_type=mm.get_autocast_device(device), dtype=dtype) if autocast_enabled else nullcontext():
 
@@ -1232,7 +1288,8 @@ class WanVideoSampler:
                     "wananim_pose_latents": wananim_pose_latents.to(device) if wananim_pose_latents is not None else None, # WanAnimate pose latents
                     "wananim_face_pixel_values": wananim_face_pixels.to(device, torch.float32) if wananim_face_pixels is not None else None, # WanAnimate face images
                     "wananim_pose_strength": wananim_pose_strength,
-                    "wananim_face_strength": wananim_face_strength
+                    "wananim_face_strength": wananim_face_strength,
+                    "lynx_embeds": lynx_embeds, # Lynx face and reference embeddings
                 }
 
                 batch_size = 1
@@ -1313,6 +1370,8 @@ class WanVideoSampler:
 
                         #phantom
                         if use_phantom and not math.isclose(phantom_cfg_scale[idx], 1.0):
+                            if cache_state is not None and len(cache_state) != 3:
+                                cache_state.append(None)
                             noise_pred_phantom, cache_state_phantom = transformer(
                             context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
                             **base_params)
@@ -1333,9 +1392,9 @@ class WanVideoSampler:
                                 else:  # multitalk
                                     base_params['multitalk_audio'] = torch.zeros_like(multitalk_audio_input)[-1:]
                                     audio_context = negative_embeds
-
+                                base_params['is_uncond'] = False
                                 noise_pred_no_audio, cache_state_audio = transformer(
-                                    context=audio_context, is_uncond=False,
+                                    context=audio_context,
                                     pred_id=cache_state[2] if cache_state else None,
                                     vace_data=vace_data,
                                     **base_params)
@@ -1344,6 +1403,18 @@ class WanVideoSampler:
                                     + cfg_scale * (noise_pred_no_audio[0] - noise_pred_uncond)
                                     + audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_no_audio[0]))
                                 return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_audio]
+                        #lynx
+                        if lynx_embeds is not None and not math.isclose(lynx_cfg_scale[idx], 1.0):
+                            base_params['is_uncond'] = False
+                            if cache_state is not None and len(cache_state) != 3:
+                                cache_state.append(None)
+                            noise_pred_lynx, cache_state_lynx = transformer(
+                            context=negative_embeds, pred_id=cache_state[2] if cache_state else None, vace_data=None,
+                            **base_params)
+
+                            noise_pred = (noise_pred_uncond + lynx_cfg_scale[idx] * (noise_pred_lynx[0] - noise_pred_uncond)
+                                          + cfg_scale * (noise_pred_cond - noise_pred_lynx[0]))
+                            return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_lynx]
 
                     #batched
                     else:
@@ -2714,8 +2785,7 @@ class WanVideoSampler:
                     else:
                         noise_pred, self.cache_state = predict_with_cfg(
                             latent_model_input,
-                            cfg[idx], text_embeds["prompt_embeds"],
-                            text_embeds["negative_prompt_embeds"],
+                            cfg[idx], text_embeds["prompt_embeds"], text_embeds["negative_prompt_embeds"],
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                             cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, multitalk_audio_embeds=multitalk_audio_embeds, mtv_motion_tokens=mtv_motion_tokens, s2v_audio_input=s2v_audio_input,
                             humo_image_cond=humo_image_cond, humo_image_cond_neg=humo_image_cond_neg, humo_audio=humo_audio, humo_audio_neg=humo_audio_neg,
@@ -2724,8 +2794,7 @@ class WanVideoSampler:
                         if bidirectional_sampling:
                             noise_pred_flipped, self.cache_state = predict_with_cfg(
                             latent_model_input_flipped,
-                            cfg[idx], text_embeds["prompt_embeds"],
-                            text_embeds["negative_prompt_embeds"],
+                            cfg[idx], text_embeds["prompt_embeds"], text_embeds["negative_prompt_embeds"],
                             timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                             cache_state=self.cache_state, fantasy_portrait_input=fantasy_portrait_input, mtv_motion_tokens=mtv_motion_tokens,reverse_time=True)
 
