@@ -1003,6 +1003,9 @@ class WanVideoSampler:
         lynx_ref_buffer = None
         lynx_embeds = image_embeds.get("lynx_embeds", None)
         if lynx_embeds is not None:
+            if lynx_embeds.get("ip_x", None) is not None:
+                if transformer.blocks[0].cross_attn.ip_adapter is None:
+                    raise ValueError("Lynx IP embeds provided, but the no lynx ip adapter layers found in the model.")
             lynx_embeds = lynx_embeds.copy()
             log.info("Using Lynx embeddings", lynx_embeds)
             lynx_ref_latent = lynx_embeds.get("ref_latent", None)
@@ -1013,6 +1016,8 @@ class WanVideoSampler:
                 lynx_cfg_scale = [lynx_cfg_scale] * (steps + 1)
 
             if lynx_ref_latent is not None:
+                if transformer.blocks[0].self_attn.ref_adapter is None:
+                    raise ValueError("Lynx reference provided, but the no lynx reference adapter layers found in the model.")
                 lynx_ref_latent = lynx_ref_latent[0]
                 lynx_ref_latent_uncond = lynx_ref_latent_uncond[0]
                 lynx_embeds["ref_feature_extractor"] = True
@@ -1038,14 +1043,14 @@ class WanVideoSampler:
                     )
                     log.info(f"Extracted {len(lynx_ref_buffer_uncond)} uncond ref buffers")
                 
-                if lynx_embeds.get("ip_x", None) is not None:
-                    lynx_embeds["ip_x"] = lynx_embeds["ip_x"].to(device, dtype)
-                    lynx_embeds["ip_x_uncond"] = lynx_embeds["ip_x_uncond"].to(device, dtype)
-                lynx_embeds["ref_feature_extractor"] = False
-                lynx_embeds["ref_latent"] = lynx_embeds["ref_text_embed"] = None
-                lynx_embeds["ref_buffer"] = lynx_ref_buffer
-                lynx_embeds["ref_buffer_uncond"] = lynx_ref_buffer_uncond if not math.isclose(cfg[0], 1.0) else None
-                mm.soft_empty_cache()
+            if lynx_embeds.get("ip_x", None) is not None:
+                lynx_embeds["ip_x"] = lynx_embeds["ip_x"].to(device, dtype)
+                lynx_embeds["ip_x_uncond"] = lynx_embeds["ip_x_uncond"].to(device, dtype)
+            lynx_embeds["ref_feature_extractor"] = False
+            lynx_embeds["ref_latent"] = lynx_embeds["ref_text_embed"] = None
+            lynx_embeds["ref_buffer"] = lynx_ref_buffer
+            lynx_embeds["ref_buffer_uncond"] = lynx_ref_buffer_uncond if not math.isclose(cfg[0], 1.0) else None
+            mm.soft_empty_cache()
 
         #region model pred
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None,

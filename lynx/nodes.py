@@ -1,10 +1,7 @@
 import os
 import torch
-import gc
-from ..utils import log, dict_to_device
+from ..utils import log
 import numpy as np
-from accelerate import init_empty_weights
-from accelerate.utils import set_module_tensor_to_device
 
 import comfy.model_management as mm
 from comfy.utils import load_torch_file
@@ -56,19 +53,6 @@ class LoadLynxResampler:
         return resampler,
 
 
-class VideoStyleInfo:  # key names should match those used in style.yaml file
-    style_name: str = 'none'
-    num_frames: int = 81
-    seed: int = -1
-    guidance_scale: float = 5.0
-    guidance_scale_i: float = 2.0
-    num_inference_steps: int = 50
-    width: int = 832
-    height: int = 480
-    prompt: str = ''
-    negative_prompt: str = ''
-
-
 class LynxInsightFaceCrop:
     @classmethod
     def INPUT_TYPES(s):
@@ -89,18 +73,7 @@ class LynxInsightFaceCrop:
         from insightface.utils import face_align
 
         image_np = (image[0].numpy() * 255).astype(np.uint8)
-        # Landmarks
-
-        # landmarks = np.array([
-        #     [599.9878,  633.5308 ],
-        #     [893.5392,  642.8297 ],
-        #     [733.05945, 844.21454],
-        #     [640.42206, 970.78687],
-        #     [854.4849,  979.5486 ]
-        # ])
         landmarks = get_landmarks_from_image(image_np)
-
-        print(landmarks)
 
         in_image = np.array(image_np)
         landmark = np.array(landmarks)
@@ -137,12 +110,11 @@ class LynxEncodeFaceIP:
         from .face.face_encoder import FaceEncoderArcFace
 
         image_in = ip_image.permute(0, 3, 1, 2).to(device) * 2 - 1  # to [-1, 1]
-        print("image_in.shape", image_in.shape) #torch.Size([1, 3, 112, 112])
 
         # Face embedding via ArcFace
         face_encoder = FaceEncoderArcFace()
         face_encoder.init_encoder_model(device)
-        arcface_embed = face_encoder(image_in).to(device, resampler.dtype)
+        arcface_embed = face_encoder(image_in).to(device, resampler.dtype)[0]
 
         arcface_embed = arcface_embed.reshape([1, -1, 512])
 

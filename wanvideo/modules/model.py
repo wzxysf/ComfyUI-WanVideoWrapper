@@ -640,7 +640,7 @@ class WanT2VCrossAttention(WanSelfAttention):
         q = self.norm_q(self.q(x),num_chunks=2 if rope_func == "comfy_chunked" else 1).view(b, -1, n, d)
 
         if nag_context is not None and not is_uncond:
-            x_text = self.normalized_attention_guidance(b, n, d, q, context, nag_context, nag_params)
+            x = self.normalized_attention_guidance(b, n, d, q, context, nag_context, nag_params)
         else:
             k = self.norm_k(self.k(context)).view(b, -1, n, d)
             v = self.v(context).view(b, -1, n, d)
@@ -650,13 +650,10 @@ class WanT2VCrossAttention(WanSelfAttention):
                 q = rope_apply_z(q, grid_sizes, cross_freqs, inner_t).to(q)
                 k = rope_apply_c(k, cross_freqs, inner_c).to(q)
 
-            x_text = attention(q, k, v, attention_mode=self.attention_mode)
-            x_text = x_text.flatten(2)
-
-        x = x_text
+            x = attention(q, k, v, attention_mode=self.attention_mode).flatten(2)
 
         if lynx_x_ip is not None and self.ip_adapter is not None and ip_scale !=0:
-            lynx_x_ip = self.ip_adapter(self, q, x, lynx_x_ip)
+            lynx_x_ip = self.ip_adapter(self, q, lynx_x_ip)
             x = x.add(lynx_x_ip, alpha=lynx_ip_scale)
 
         # FantasyTalking audio attention
@@ -855,7 +852,8 @@ class WanAttentionBlock(nn.Module):
                  use_motion_attn=False,
                  use_humo_audio_attn=False,
                  face_fuser_block=False,
-                 lynx_layers="none",
+                 lynx_ip_layers=None,
+                 lynx_ref_layers=None,
                  block_idx=0
                  ):
         super().__init__()
@@ -908,11 +906,13 @@ class WanAttentionBlock(nn.Module):
 
         # Lynx
         self.ref_adapter = None
-        if lynx_layers == "full":
-            from ...lynx.modules import WanLynxIPCrossAttention, WanLynxRefAttention
-            self.cross_attn.ip_adapter = WanLynxIPCrossAttention(cross_attention_dim=self.dim, dim=self.dim, n_registers=16)
+        if lynx_ref_layers == "full":
+            from ...lynx.modules import WanLynxRefAttention
             self.self_attn.ref_adapter = WanLynxRefAttention(dim=self.dim)
-        elif lynx_layers == "lite":
+        if lynx_ip_layers == "full":
+            from ...lynx.modules import WanLynxIPCrossAttention
+            self.cross_attn.ip_adapter = WanLynxIPCrossAttention(cross_attention_dim=self.dim, dim=self.dim, n_registers=16)
+        elif lynx_ip_layers == "lite":
             from ...lynx.modules import WanLynxIPCrossAttention
             if self.block_idx % 2 == 0:
                 self.cross_attn.ip_adapter = WanLynxIPCrossAttention(cross_attention_dim=2048, dim=self.dim, n_registers=0, bias=False)
@@ -1525,7 +1525,8 @@ class WanModel(torch.nn.Module):
                 is_wananimate=False,
                 motion_encoder_dim=512,
                 # lynx
-                lynx_layers="none",
+                lynx_ip_layers=None,
+                lynx_ref_layers=None,
                 ):
         r"""
         Initialize the diffusion model backbone.
@@ -1635,7 +1636,8 @@ class WanModel(torch.nn.Module):
 
         self.multitalk_model_type = "none"
 
-        self.lynx_layers = lynx_layers
+        self.lynx_ip_layers = lynx_ip_layers
+        self.lynx_ref_layers = lynx_ref_layers
 
         self.humo_audio = humo_audio
 
@@ -1680,7 +1682,7 @@ class WanModel(torch.nn.Module):
             BaseWanAttentionBlock('t2v_cross_attn', self.in_features, self.out_features, ffn_dim, self.ffn2_dim, num_heads,
                               qk_norm, cross_attn_norm, eps,
                               attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function,
-                              block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None, lynx_layers=lynx_layers, block_idx=i)
+                              block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None, lynx_ip_layers=lynx_ip_layers, lynx_ref_layers=lynx_ref_layers, block_idx=i)
             for i in range(num_layers)
             ])
         else:
@@ -1697,7 +1699,7 @@ class WanModel(torch.nn.Module):
                                 qk_norm, cross_attn_norm, eps,
                                 attention_mode=self.attention_mode, rope_func=self.rope_func, rms_norm_function=rms_norm_function, 
                                 use_motion_attn=(i % 4 == 0 and use_motion_attn), use_humo_audio_attn=self.humo_audio,
-                                face_fuser_block = (i % 5 == 0 and is_wananimate), lynx_layers=lynx_layers, block_idx=i)
+                                face_fuser_block = (i % 5 == 0 and is_wananimate), lynx_ip_layers=lynx_ip_layers, lynx_ref_layers=lynx_ref_layers, block_idx=i)
                 for i in range(num_layers)
             ])
         #MTV Crafter
@@ -2105,7 +2107,6 @@ class WanModel(torch.nn.Module):
             lynx_ref_blocks_to_use = lynx_embeds.get("ref_blocks_to_use", None)
             if lynx_ref_blocks_to_use is None:
                 lynx_ref_blocks_to_use = list(range(len(self.blocks)))
-            print(f"Using Lynx ref feature extractor: {lynx_ref_feature_extractor}, blocks: {lynx_ref_blocks_to_use}")
             if (lynx_embeds['start_percent'] <= current_step_percentage <= lynx_embeds['end_percent']) and not lynx_ref_feature_extractor:
                 if not is_uncond:
                     lynx_x_ip = lynx_embeds.get("ip_x", None)
@@ -2671,8 +2672,6 @@ class WanModel(torch.nn.Module):
                 block_idx = f"{b:02d}"
                 if lynx_ref_buffer is not None and not lynx_ref_feature_extractor:
                     lynx_ref_feature = lynx_ref_buffer.get(block_idx, None)
-                    if lynx_ref_feature is not None:
-                        print("loading from lynx ref buffer for block", block_idx)
                 else:
                     lynx_ref_feature = None
                 # Prefetch blocks if enabled
@@ -2720,7 +2719,7 @@ class WanModel(torch.nn.Module):
                 # lynx ref
                 if lynx_ref_feature_extractor:
                     if b in lynx_ref_blocks_to_use:
-                        print("storing to lynx ref buffer for block", block_idx)
+                        log.info(f"storing to lynx ref buffer for block {block_idx}")
                         lynx_ref_buffer[block_idx] = lynx_ref_feature
                 #uni3c controlnet
                 if uni3c_controlnet_states is not None and b < len(uni3c_controlnet_states):

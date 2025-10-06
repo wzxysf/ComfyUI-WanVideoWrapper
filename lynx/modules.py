@@ -29,9 +29,8 @@ class WanLynxIPCrossAttention(nn.Module):
         else:
             self.registers = None
 
-    def forward(self, block, q, x, ip_x):
-        b, n, d = x.size(0), block.num_heads, block.head_dim
-        s = q.shape[1]
+    def forward(self, block, q, ip_x):
+        b, s, n, d = q.shape
         ip_lens = [ip_x.shape[1]]
 
         if self.registers is not None and ip_x is not None and ip_x.shape[0] == 1:
@@ -54,10 +53,10 @@ class WanLynxIPCrossAttention(nn.Module):
             q,
             ip_key.view(b, -1, n, d),
             ip_value.view(b, -1, n, d)
-        ).reshape(b, -1, n * d)
+        ).flatten(2)
 
 
-@torch.compiler.disable()
+#@torch.compiler.disable()
 class WanLynxRefAttention(nn.Module):
     def __init__(self, dim=5120, bias=True, attention_mode="sdpa"):
         super().__init__()

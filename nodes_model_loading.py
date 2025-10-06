@@ -1152,15 +1152,16 @@ class WanVideoModelLoader:
         is_wananimate = "pose_patch_embedding.weight" in sd
 
         #lynx
-        lynx_layers = "none"
-        if "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd and "blocks.0.self_attn.ref_adapter.to_k_ref.weight" in sd:
-            log.info("Lynx full model detected")
-            n_registers = sd["blocks.0.cross_attn.ip_adapter.registers"].shape[1]
-            lynx_layers = "full"
+        lynx_ip_layers = lynx_ref_layers = None
+        if "blocks.0.self_attn.ref_adapter.to_k_ref.weight" in sd:
+            log.info("Lynx full reference adapter detected")
+            lynx_ref_layers = "full"
+        if "blocks.0.cross_attn.ip_adapter.registers" in sd:
+            log.info("Lynx full IP adapter detected")
+            lynx_ip_layers = "full"
         elif "blocks.0.cross_attn.ip_adapter.to_v_ip.weight" in sd:
-            log.info("Lynx lite model detected")
-            n_registers = 0
-            lynx_layers = "lite"
+            log.info("Lynx lite IP adapter detected")
+            lynx_ip_layers = "lite"
 
         model_type = "t2v"
         if "audio_injector.injector.0.k.weight" in sd:
@@ -1298,7 +1299,8 @@ class WanVideoModelLoader:
             "humo_audio": is_humo,
             "is_wananimate": is_wananimate,
             "rms_norm_function": rms_norm_function,
-            "lynx_layers": lynx_layers,
+            "lynx_ip_layers": lynx_ip_layers,
+            "lynx_ref_layers": lynx_ref_layers,
 
         }
 
