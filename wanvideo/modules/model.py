@@ -2325,7 +2325,11 @@ class WanModel(torch.nn.Module):
         if self.zero_timestep:
             t = torch.cat([t, torch.zeros([1], dtype=t.dtype, device=t.device)])
 
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(self.time_embedding[0].weight.dtype))  # b, dim
+        time_embed_dtype = self.time_embedding[0].weight.dtype
+        if time_embed_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            time_embed_dtype = self.base_dtype
+
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(time_embed_dtype))  # b, dim
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))  # b, 6, dim
 
         #S2V zero timestep
@@ -2341,7 +2345,7 @@ class WanModel(torch.nn.Module):
 
         if x_ip is not None:
             timestep_ip = torch.zeros_like(t)  # [B] with 0s
-            t_ip = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep_ip.flatten()).to(self.time_embedding[0].weight.dtype))  # b, dim )
+            t_ip = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, timestep_ip.flatten()).to(time_embed_dtype))  # b, dim )
             e0_ip = self.time_projection(t_ip).unflatten(1, (6, self.dim))
 
         if fps_embeds is not None:
@@ -2369,6 +2373,9 @@ class WanModel(torch.nn.Module):
         
         #context (text embedding)
         if hasattr(self, "text_embedding") and context != []:
+            text_embed_dtype = self.text_embedding[0].weight.dtype
+            if text_embed_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+                text_embed_dtype = self.base_dtype
             if self.offload_txt_emb:
                 self.text_embedding.to(self.main_device)
 
@@ -2382,7 +2389,7 @@ class WanModel(torch.nn.Module):
                     torch.cat(
                         [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                     for u in context
-                ]).to(self.text_embedding[0].weight.dtype))
+                ]).to(text_embed_dtype))
             
             # NAG
             if nag_context is not None:
@@ -2391,7 +2398,7 @@ class WanModel(torch.nn.Module):
                     torch.cat(
                         [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                     for u in nag_context
-                ]).to(self.text_embedding[0].weight.dtype))
+                ]).to(text_embed_dtype))
             
             if self.offload_txt_emb:
                 self.text_embedding.to(self.offload_device, non_blocking=self.use_non_blocking)
