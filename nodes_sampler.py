@@ -12,7 +12,7 @@ from .wanvideo.schedulers import get_scheduler, get_sampling_sigmas, retrieve_ti
 from .gguf.gguf import set_lora_params_gguf
 from .multitalk.multitalk import timestep_transform, add_noise
 from .utils import(log, print_memory, apply_lora, clip_encode_image_tiled, fourier_filter, optimized_scale, setup_radial_attention,
-                   compile_model, dict_to_device, tangential_projection, set_module_tensor_to_device, get_raag_guidance)
+                   compile_model, dict_to_device, tangential_projection, set_module_tensor_to_device, get_raag_guidance, temporal_score_rescaling)
 from .cache_methods.cache_methods import cache_report
 from .nodes_model_loading import load_weights
 from .enhance_a_video.globals import set_enhance_weight, set_num_frames
@@ -936,7 +936,7 @@ class WanVideoSampler:
                 timesteps[-drift_steps:] = drift_timesteps[-drift_steps:]
 
         # Experimental args
-        use_cfg_zero_star = use_tangential = use_fresca = bidirectional_sampling =False
+        use_cfg_zero_star = use_tangential = use_fresca = bidirectional_sampling = use_tsr = False
         raag_alpha = 0.0
         if experimental_args is not None:
             video_attention_split_steps = experimental_args.get("video_attention_split_steps", [])
@@ -960,6 +960,9 @@ class WanVideoSampler:
             bidirectional_sampling = experimental_args.get("bidirectional_sampling", False)
             if bidirectional_sampling:
                 sample_scheduler_flipped = copy.deepcopy(sample_scheduler)
+            use_tsr = experimental_args.get("temporal_score_rescaling", False)
+            tsr_k = experimental_args.get("tsr_k", 1.0)
+            tsr_sigma = experimental_args.get("tsr_sigma", 1.0)
 
         # Rotary positional embeddings (RoPE)
 
@@ -2223,6 +2226,8 @@ class WanVideoSampler:
                                 step_iteration_count += 1
 
                                 # update latent
+                                if use_tsr:
+                                    noise_pred = temporal_score_rescaling(noise_pred, latent, timestep, tsr_k, tsr_sigma)
                                 if scheduler == "multitalk":
                                     noise_pred = -noise_pred
                                     dt = (timesteps[i] - timesteps[i + 1]) / 1000
@@ -2693,6 +2698,9 @@ class WanVideoSampler:
                                 sampling_pbar.update(1)
                                 step_iteration_count += 1
 
+                                if use_tsr:
+                                    noise_pred = temporal_score_rescaling(noise_pred, latent, timestep, tsr_k, tsr_sigma)
+
                                 latent = sample_scheduler.step(noise_pred.unsqueeze(0), timestep, latent.unsqueeze(0).to(noise_pred.device), **scheduler_step_args)[0].squeeze(0)
                                 del noise_pred, latent_model_input, timestep
 
@@ -2794,6 +2802,9 @@ class WanVideoSampler:
 
                     if flowedit_args is None:
                         latent = latent.to(intermediate_device)
+
+                        if use_tsr:
+                            noise_pred = temporal_score_rescaling(noise_pred, latent, timestep, tsr_k, tsr_sigma)
 
                         if len(timestep.shape) != 1 and not is_pusa: #5b
                             # all_indices is a list of indices to skip
