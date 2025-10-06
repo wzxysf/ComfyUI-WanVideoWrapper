@@ -2328,7 +2328,7 @@ class WanModel(torch.nn.Module):
             t = torch.cat([t, torch.zeros([1], dtype=t.dtype, device=t.device)])
 
         time_embed_dtype = self.time_embedding[0].weight.dtype
-        if time_embed_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+        if time_embed_dtype not in [torch.float16, torch.bfloat16, torch.float32]:
             time_embed_dtype = self.base_dtype
 
         e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(time_embed_dtype))  # b, dim
@@ -2376,7 +2376,7 @@ class WanModel(torch.nn.Module):
         #context (text embedding)
         if hasattr(self, "text_embedding") and context != []:
             text_embed_dtype = self.text_embedding[0].weight.dtype
-            if text_embed_dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            if text_embed_dtype not in [torch.float16, torch.bfloat16, torch.float32]:
                 text_embed_dtype = self.base_dtype
             if self.offload_txt_emb:
                 self.text_embedding.to(self.main_device)
