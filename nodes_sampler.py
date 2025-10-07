@@ -2622,12 +2622,12 @@ class WanVideoSampler:
                             if samples is not None:
                                 input_samples = samples["samples"].squeeze(0).to(noise)
                                 # Check if we have enough frames in input_samples
-                                if latent_end_idx > input_samples.shape[1]:
+                                if end_latent > input_samples.shape[1]:
                                     # We need more frames than available - pad the input_samples at the end
-                                    pad_length = latent_end_idx - input_samples.shape[1]
+                                    pad_length = end_latent - input_samples.shape[1]
                                     last_frame = input_samples[:, -1:].repeat(1, pad_length, 1, 1)
                                     input_samples = torch.cat([input_samples, last_frame], dim=1)
-                                input_samples = input_samples[:, latent_start_idx:latent_end_idx]
+                                input_samples = input_samples[:, start_latent:end_latent]
                                 if noise_mask is not None:
                                     original_image = input_samples.to(device)
 
@@ -2647,7 +2647,7 @@ class WanVideoSampler:
                                     if noise_mask.shape[0] < noise.shape[1]:
                                         noise_mask = noise_mask.repeat(noise.shape[1] // noise_mask.shape[0], 1, 1)
                                     else:
-                                        noise_mask = noise_mask[latent_start_idx:latent_end_idx]
+                                        noise_mask = noise_mask[start_latent:end_latent]
                                     noise_mask = torch.nn.functional.interpolate(
                                         noise_mask.unsqueeze(0).unsqueeze(0),  # Add batch and channel dims [1,1,T,H,W]
                                         size=(noise.shape[1], noise.shape[2], noise.shape[3]),
