@@ -969,9 +969,12 @@ class VideoVAE_(nn.Module):
 
 
     #modification originally by @raindrop313 https://github.com/raindrop313/ComfyUI-WanVideoStartEndFrames
-    def encode_2(self, x):
+    def encode_2(self, x, pbar=True):
         t = x.shape[2]
         iter_ = 2 + (t - 2) // 4
+
+        if pbar:
+            pbar = ProgressBar(iter_)
 
         for i in range(iter_):
             self._enc_conv_idx = [0]
@@ -994,6 +997,8 @@ class VideoVAE_(nn.Module):
         out_tail = out[:, :, -1, :, :].unsqueeze(2)
         mu = torch.cat([self.conv1(out_head), self.conv1(out_tail)], dim=2).chunk(2, dim=1)[0]
         mu = (mu - self.mean.to(mu)) * self.inv_std.to(mu)
+        if pbar:
+            pbar.update_absolute(0)
 
         return mu
 
