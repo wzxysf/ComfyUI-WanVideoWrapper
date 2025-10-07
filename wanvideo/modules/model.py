@@ -2572,7 +2572,10 @@ class WanModel(torch.nn.Module):
                     should_calc = True
 
         x = x.to(self.base_dtype)
-        e0 = e0.to(self.base_dtype)
+        if isinstance(e0, list):
+            e0 = [item.to(self.base_dtype) if torch.is_tensor(item) else item for item in e0]
+        else:
+            e0 = e0.to(self.base_dtype)
 
         if self.enable_easycache:
             original_x = x.clone().to(self.cache_device)
