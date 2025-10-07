@@ -861,14 +861,18 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         # GGUF: skip GGUFParameter params
         if gguf and isinstance(param, GGUFParameter):
             continue
-
-        value=sd[name.replace("_orig_mod.", "")]
+        
+        key = name.replace("_orig_mod.", "")
+        value=sd[key]
 
         if gguf:
             dtype_to_use = torch.float32 if "patch_embedding" in name or "motion_encoder" in name else base_dtype
         else:
             dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
             dtype_to_use = weight_dtype if value.dtype == weight_dtype else dtype_to_use
+            scale_key = key.replace(".weight", ".scale_weight")
+            if scale_key in sd:
+                dtype_to_use = value.dtype
             if "modulation" in name or "norm" in name or "bias" in name or "img_emb" in name:
                 dtype_to_use = base_dtype
             if "patch_embedding" in name or "motion_encoder" in name:
