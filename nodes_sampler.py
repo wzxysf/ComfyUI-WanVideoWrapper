@@ -1135,7 +1135,7 @@ class WanVideoSampler:
                 if control_camera_latents is not None:
                     if (control_camera_start_percent <= current_step_percentage <= control_camera_end_percent) or \
                             (control_end_percent > 0 and idx == 0 and current_step_percentage >= control_camera_start_percent):
-                        control_camera_input = control_camera_latents.to(z)
+                        control_camera_input = control_camera_latents.to(device, dtype)
                     else:
                         control_camera_input = None
 
