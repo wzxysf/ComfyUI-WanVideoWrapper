@@ -969,7 +969,7 @@ class VideoVAE_(nn.Module):
 
 
     #modification originally by @raindrop313 https://github.com/raindrop313/ComfyUI-WanVideoStartEndFrames
-    def encode_2(self, x, pbar=True):
+    def encode_2(self, x, pbar=True, sample=False):
         t = x.shape[2]
         iter_ = 2 + (t - 2) // 4
 
@@ -1312,7 +1312,7 @@ class WanVideoVAE(nn.Module):
                 hidden_state = self.tiled_encode(video, device, tile_size, tile_stride, end_=end_, pbar=pbar)
             else:
                 if end_:
-                    hidden_state = self.double_encode(video, device)
+                    hidden_state = self.double_encode(video, device, pbar=pbar, sample=sample)
                 else:
                     hidden_state = self.single_encode(video, device, pbar=pbar, sample=sample)
             hidden_state = hidden_state.squeeze(0)
