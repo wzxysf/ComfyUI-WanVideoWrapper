@@ -146,7 +146,7 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
     return x
 
 class TAEHV(nn.Module):
-    def __init__(self, state_dict, parallel=False, decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True)):
+    def __init__(self, state_dict, parallel=False, decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True), dtype=torch.float16):
         """Initialize pretrained TAEHV from the given checkpoint.
 
         Arg:
@@ -160,6 +160,8 @@ class TAEHV(nn.Module):
         self.patch_size = 1
         if self.latent_channels == 48:
             self.patch_size = 2
+        self.dtype = dtype
+
         self.encoder = nn.Sequential(
             conv(self.image_channels*self.patch_size**2, 64), nn.ReLU(inplace=True),
             TPool(64, 2), conv(64, 64, stride=2, bias=False), MemBlock(64, 64), MemBlock(64, 64), MemBlock(64, 64),
@@ -178,7 +180,7 @@ class TAEHV(nn.Module):
         )
         if state_dict is not None:
             self.load_state_dict(self.patch_tgrow_layers(state_dict))
-        self.dtype = torch.float16
+        
         self.parallel = parallel
 
     def patch_tgrow_layers(self, sd):
