@@ -35,6 +35,7 @@ def _replace_linear(model, compute_dtype, state_dict, prefix="", patches=None, s
     return model
 
 def set_lora_params(module, patches, module_prefix=""):
+    remove_lora_from_module(module)
     # Recursively set lora_diffs and lora_strengths for all CustomLinear layers
     for name, child in module.named_children():
         child_prefix = (f"{module_prefix}{name}.")
@@ -43,6 +44,10 @@ def set_lora_params(module, patches, module_prefix=""):
         key = f"diffusion_model.{module_prefix}weight"
         patch = patches.get(key, [])
         #print(f"Processing LoRA patches for {key}: {len(patch)} patches found")
+        if len(patch) == 0:
+            key = key.replace("_orig_mod.", "")
+            patch = patches.get(key, [])
+            #print(f"Processing LoRA patches for {key}: {len(patch)} patches found")
         if len(patch) != 0:
             lora_diffs = []
             for p in patch:
