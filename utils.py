@@ -160,7 +160,8 @@ def patch_weight_to_device(self, key, device_to=None, inplace_update=False, back
     else:
         set_func(out_weight, inplace_update=inplace_update, seed=string_to_seed(key))
 
-def apply_lora(model, device_to, transformer_load_device, params_to_keep=None, dtype=None, base_dtype=None, state_dict=None, low_mem_load=False, control_lora=False, scale_weights={}):
+def apply_lora(model, device_to, transformer_load_device, params_to_keep=None, dtype=None, 
+               base_dtype=None, state_dict=None, low_mem_load=False, control_lora=False, scale_weights={}):
         model.patch_weight_to_device = types.MethodType(patch_weight_to_device, model)
         to_load = []
         for n, m in model.model.named_modules():

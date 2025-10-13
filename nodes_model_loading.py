@@ -892,8 +892,8 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
         cnt += 1
         if cnt % 100 == 0:
             pbar.update(100)
-    #for name, param in transformer.named_parameters():
-    #    print(name, param.device, param.dtype)
+
+    #[print(name, param.device, param.dtype) for name, param in transformer.named_parameters()]
 
     pbar.update_absolute(0)
 
@@ -1112,7 +1112,8 @@ class WanVideoModelLoader:
         if "vace_blocks.0.after_proj.weight" in sd and not "patch_embedding.weight" in sd:
             raise ValueError("You are attempting to load a VACE module as a WanVideo model, instead you should use the vace_model input and matching T2V base model")
 
-        # currently this can be VAE or MTV-Crafter weights
+        # currently this can be VACE, MTV-Crafter, Lynx or Ovi-audio weights
+        extra_audio_model = False
         if extra_model is not None:
             for _model in extra_model:
                 print("Loading extra model: ", _model["path"])
@@ -1126,31 +1127,37 @@ class WanVideoModelLoader:
                     if _model["path"].endswith(".gguf"):
                         raise ValueError("With GGUF extra model the main model must also be GGUF quantized model")
                     extra_sd = load_torch_file(_model["path"], device=transformer_load_device, safe_load=True)
+                if "audio_model.patch_embedding.0.weight" in extra_sd:
+                    extra_audio_model = True
                 sd.update(extra_sd)
                 del extra_sd
 
         first_key = next(iter(sd))
+        if first_key.startswith("audio_model.") and not extra_audio_model:
+            sd = {key.replace("audio_model.", "", 1): value for key, value in sd.items()}
         if first_key.startswith("model.diffusion_model."):
-            new_sd = {}
-            for key, value in sd.items():
-                new_key = key.replace("model.diffusion_model.", "", 1)
-                new_sd[new_key] = value
-            sd = new_sd
+            sd = {key.replace("model.diffusion_model.", "", 1): value for key, value in sd.items()}
         elif first_key.startswith("model."):
-            new_sd = {}
-            for key, value in sd.items():
-                new_key = key.replace("model.", "", 1)
-                new_sd[new_key] = value
-            sd = new_sd
-        if not "patch_embedding.weight" in sd:
-            raise ValueError("Invalid WanVideo model selected")
-        dim = sd["patch_embedding.weight"].shape[0]
+            sd = {key.replace("model.", "", 1): value for key, value in sd.items()}
+
+        if "patch_embedding.weight" in sd:
+            dim = sd["patch_embedding.weight"].shape[0]
+            in_channels = sd["patch_embedding.weight"].shape[1]
+        elif "patch_embedding.0.weight" in sd:
+            dim = sd["patch_embedding.0.weight"].shape[0]
+            in_channels = sd["patch_embedding.0.weight"].shape[1]
+        else:
+            raise ValueError("No patch_embedding weight found, is the selected model a full WanVideo model?")
+
         in_features = sd["blocks.0.self_attn.k.weight"].shape[1]
         out_features = sd["blocks.0.self_attn.k.weight"].shape[0]
-        in_channels = sd["patch_embedding.weight"].shape[1]
         log.info(f"Detected model in_channels: {in_channels}")
         ffn_dim = sd["blocks.0.ffn.0.bias"].shape[0]
         ffn2_dim = sd["blocks.0.ffn.2.weight"].shape[1]
+
+        patch_size=(1, 2, 2)
+        if "patch_embedding.0.weight" in sd:
+            patch_size = [1]
 
         is_humo = "audio_proj.audio_proj_glob_1.layer.weight" in sd
         is_wananimate = "pose_patch_embedding.weight" in sd
@@ -1273,6 +1280,7 @@ class WanVideoModelLoader:
             "dim": dim,
             "in_features": in_features,
             "out_features": out_features,
+            "patch_size": patch_size,
             "ffn_dim": ffn_dim,
             "ffn2_dim": ffn2_dim,
             "eps": 1e-06,
@@ -1309,8 +1317,32 @@ class WanVideoModelLoader:
         }
 
         with init_empty_weights():
-            transformer = WanModel(**TRANSFORMER_CONFIG)
-        transformer.eval()
+            transformer = WanModel(**TRANSFORMER_CONFIG).eval()
+
+        if extra_audio_model:
+            log.info("Ovi extra audio model detected, initializing...")
+            TRANSFORMER_CONFIG.update({
+                "patch_size": [1],
+                "in_dim": 20, 
+                "out_dim": 20,
+                })
+
+            with init_empty_weights():
+                transformer.audio_model = WanModel(**TRANSFORMER_CONFIG).eval()
+
+            from .wanvideo.modules.model import WanLayerNorm, WanRMSNorm
+
+            for block in transformer.blocks:
+                block.cross_attn.k_fusion = nn.Linear(block.dim, block.dim)
+                block.cross_attn.v_fusion = nn.Linear(block.dim, block.dim)
+                block.cross_attn.pre_attn_norm_fusion = WanLayerNorm(block.dim, elementwise_affine=True)
+                block.cross_attn.norm_k_fusion = WanRMSNorm(block.dim, eps=1e-6) if block.qk_norm else nn.Identity()
+
+            for block in transformer.audio_model.blocks:
+                block.cross_attn.k_fusion = nn.Linear(block.dim, block.dim)
+                block.cross_attn.v_fusion = nn.Linear(block.dim, block.dim)
+                block.cross_attn.pre_attn_norm_fusion = WanLayerNorm(block.dim, elementwise_affine=True)
+                block.cross_attn.norm_k_fusion = WanRMSNorm(block.dim, eps=1e-6) if block.qk_norm else nn.Identity()
 
         #ReCamMaster
         if "blocks.0.cam_encoder.weight" in sd:
@@ -1422,10 +1454,10 @@ class WanVideoModelLoader:
             for k, v in sd.items():
                 if k.endswith(".scale_weight"):
                     scale_weights[k] = v.to(device, base_dtype)
-        
-        if "fp8_e4m3fn" in quantization:
+
+        if quantization == "fp8_e4m3fn":
             weight_dtype = torch.float8_e4m3fn
-        elif "fp8_e5m2" in quantization:
+        elif quantization == "fp8_e5m2":
             weight_dtype = torch.float8_e5m2
         else:
             weight_dtype = base_dtype
