@@ -1017,9 +1017,9 @@ class WanVideoAnimateEmbeds:
 
     def process(self, vae, width, height, num_frames, force_offload, frame_window_size, colormatch, pose_strength, face_strength,
                 ref_images=None, pose_images=None, face_images=None, clip_embeds=None, tiled_vae=False, bg_images=None, mask=None):
-
-        H = height
-        W = width
+        
+        W = (width // 16) * 16
+        H = (height // 16) * 16
 
         lat_h = H // vae.upsampling_factor
         lat_w = W // vae.upsampling_factor
@@ -1044,7 +1044,7 @@ class WanVideoAnimateEmbeds:
         gc.collect()
         vae.to(device)
         # Resize and rearrange the input image dimensions
-        pose_latents = ref_latents = ref_latent = None
+        pose_latents = ref_latent = None
         if pose_images is not None:
             pose_images = pose_images[..., :3]
             if pose_images.shape[1] != H or pose_images.shape[2] != W:
