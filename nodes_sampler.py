@@ -322,13 +322,6 @@ class WanVideoSampler:
                 device=torch.device("cpu"))
             seq_len = image_embeds["max_seq_len"]
 
-            clip_fea = image_embeds.get("clip_context", None)
-            if clip_fea is not None:
-                clip_fea = clip_fea.to(dtype)
-            clip_fea_neg = image_embeds.get("negative_clip_context", None)
-            if clip_fea_neg is not None:
-                clip_fea_neg = clip_fea_neg.to(dtype)
-
             control_embeds = image_embeds.get("control_embeds", None)
             if control_embeds is not None:
                 if transformer.in_dim not in [148, 52, 48, 36, 32]:
@@ -461,8 +454,16 @@ class WanVideoSampler:
             phantom_start_percent = image_embeds.get("phantom_start_percent", 0.0)
             phantom_end_percent = image_embeds.get("phantom_end_percent", 1.0)
 
+        # CLIP image features
+        clip_fea = image_embeds.get("clip_context", None)
+        if clip_fea is not None:
+            clip_fea = clip_fea.to(dtype)
+        clip_fea_neg = image_embeds.get("negative_clip_context", None)
+        if clip_fea_neg is not None:
+            clip_fea_neg = clip_fea_neg.to(dtype)
 
         num_frames = image_embeds.get("num_frames", 0)
+
         #HuMo inputs
         humo_audio = image_embeds.get("humo_audio_emb", None)
         humo_audio_neg = image_embeds.get("humo_audio_emb_neg", None)
@@ -2702,7 +2703,7 @@ class WanVideoSampler:
 
                                 noise_pred, self.cache_state = predict_with_cfg(
                                     latent_model_input, cfg[min(i, len(timesteps)-1)], positive, text_embeds["negative_prompt_embeds"],
-                                    timestep, i, cache_state=self.cache_state, image_cond=image_cond_in, wananim_face_pixels=face_images_in,
+                                    timestep, i, cache_state=self.cache_state, image_cond=image_cond_in, clip_fea=clip_fea, wananim_face_pixels=face_images_in,
                                     wananim_pose_latents=pose_input_slice, uni3c_data=uni3c_data_input,
                                  )
                                 if callback is not None:
