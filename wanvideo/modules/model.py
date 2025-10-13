@@ -2673,6 +2673,7 @@ class WanModel(torch.nn.Module):
                 lynx_ref_buffer = {}
 
             for b, block in enumerate(self.blocks):
+                mm.throw_exception_if_processing_interrupted()
                 block_idx = f"{b:02d}"
                 if lynx_ref_buffer is not None and not lynx_ref_feature_extractor:
                     lynx_ref_feature = lynx_ref_buffer.get(block_idx, None)
