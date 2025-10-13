@@ -1,7 +1,7 @@
 {
   "id": "7200c272-1c07-4834-9c36-c6ec5c140c21",
   "revision": 0,
-  "last_node_id": 126,
+  "last_node_id": 127,
   "last_link_id": 211,
   "nodes": [
     {
@@ -51,7 +51,7 @@
         78
       ],
       "flags": {},
-      "order": 17,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -97,7 +97,7 @@
         242
       ],
       "flags": {},
-      "order": 18,
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
@@ -211,7 +211,7 @@
         126
       ],
       "flags": {},
-      "order": 20,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -275,7 +275,7 @@
         318
       ],
       "flags": {},
-      "order": 16,
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
@@ -364,7 +364,7 @@
         336
       ],
       "flags": {},
-      "order": 15,
+      "order": 16,
       "mode": 0,
       "inputs": [
         {
@@ -597,7 +597,7 @@
         198
       ],
       "flags": {},
-      "order": 22,
+      "order": 23,
       "mode": 0,
       "inputs": [
         {
@@ -648,7 +648,7 @@
         46
       ],
       "flags": {},
-      "order": 23,
+      "order": 24,
       "mode": 0,
       "inputs": [
         {
@@ -678,83 +678,6 @@
         "ver": "260c181e0ee11e0fcd1595c430c3c5357870e2c6"
       },
       "widgets_values": []
-    },
-    {
-      "id": 88,
-      "type": "VHS_VideoCombine",
-      "pos": [
-        2376.7099609375,
-        387.7659912109375
-      ],
-      "size": [
-        903.5481567382812,
-        1231.548095703125
-      ],
-      "flags": {},
-      "order": 24,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 160
-        },
-        {
-          "name": "audio",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": 163
-        },
-        {
-          "name": "meta_batch",
-          "shape": 7,
-          "type": "VHS_BatchManager",
-          "link": null
-        },
-        {
-          "name": "vae",
-          "shape": 7,
-          "type": "VAE",
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "name": "Filenames",
-          "type": "VHS_FILENAMES",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "VHS_VideoCombine",
-        "cnr_id": "comfyui-videohelpersuite",
-        "ver": "0edce8ef7ce173ac97a3ed3d6f4636029d1a4530"
-      },
-      "widgets_values": {
-        "frame_rate": 24,
-        "loop_count": 0,
-        "filename_prefix": "WanVideo_Ovi",
-        "format": "video/h264-mp4",
-        "pix_fmt": "yuv420p",
-        "crf": 20,
-        "save_metadata": true,
-        "trim_to_audio": false,
-        "pingpong": false,
-        "save_output": false,
-        "videopreview": {
-          "hidden": false,
-          "paused": false,
-          "params": {
-            "filename": "WanVideo_Ovi_00027-audio.webm",
-            "subfolder": "",
-            "type": "temp",
-            "format": "video/webm",
-            "frame_rate": 24,
-            "workflow": "WanVideo_Ovi_00027.png",
-            "fullpath": "/home/kijai/AI/ComfyUI/temp/WanVideo_Ovi_00027-audio.webm"
-          }
-        }
-      }
     },
     {
       "id": 118,
@@ -841,7 +764,7 @@
         1011.80859375
       ],
       "flags": {},
-      "order": 21,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -983,29 +906,6 @@
       ]
     },
     {
-      "id": 120,
-      "type": "Note",
-      "pos": [
-        667.5817260742188,
-        947.1004028320312
-      ],
-      "size": [
-        353.9333190917969,
-        122.66668701171875
-      ],
-      "flags": {},
-      "order": 8,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "Ovi uses same positive prompt for both models, the tags <S> and <E> are MANDATORY and the spoken words should be inside them, the <AUDCAP> and <ENDAUDCAP> are optinal descriptions of the audio.\n\nThe negative prompt can be different for each model."
-      ],
-      "color": "#432",
-      "bgcolor": "#653"
-    },
-    {
       "id": 119,
       "type": "MarkdownNote",
       "pos": [
@@ -1017,7 +917,7 @@
         151.15599060058594
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1041,7 +941,7 @@
         106
       ],
       "flags": {},
-      "order": 10,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1078,7 +978,7 @@
         88
       ],
       "flags": {},
-      "order": 25,
+      "order": 26,
       "mode": 0,
       "inputs": [
         {
@@ -1107,7 +1007,7 @@
         46
       ],
       "flags": {},
-      "order": 19,
+      "order": 20,
       "mode": 0,
       "inputs": [
         {
@@ -1139,29 +1039,6 @@
       "widgets_values": []
     },
     {
-      "id": 122,
-      "type": "Note",
-      "pos": [
-        1016.081298828125,
-        594.9484252929688
-      ],
-      "size": [
-        230,
-        146
-      ],
-      "flags": {},
-      "order": 11,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "The original weights are only available in bf16, this model seem to have issues running in fp16 so if you get black output, make sure to use bf16 base_precision."
-      ],
-      "color": "#432",
-      "bgcolor": "#653"
-    },
-    {
       "id": 125,
       "type": "WanVideoEmptyMMAudioLatents",
       "pos": [
@@ -1173,7 +1050,7 @@
         58
       ],
       "flags": {},
-      "order": 12,
+      "order": 10,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1204,7 +1081,7 @@
         595.4622192382812
       ],
       "flags": {},
-      "order": 13,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -1251,6 +1128,78 @@
       "bgcolor": "#653"
     },
     {
+      "id": 127,
+      "type": "Note",
+      "pos": [
+        -103.42256164550781,
+        896.5643310546875
+      ],
+      "size": [
+        210,
+        120.13328552246094
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note: T2V or I2V",
+      "properties": {},
+      "widgets_values": [
+        "For Text-to-video, disconnect the extra_latent input and manually set your width and height here"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 120,
+      "type": "Note",
+      "pos": [
+        602.3150634765625,
+        1056.3671875
+      ],
+      "size": [
+        353.9333190917969,
+        122.66668701171875
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note: Prompts",
+      "properties": {},
+      "widgets_values": [
+        "Ovi uses same positive prompt for both models, the tags <S> and <E> are MANDATORY and the spoken words should be inside them, the <AUDCAP> and <ENDAUDCAP> are optinal descriptions of the audio.\n\nThe negative prompt can be different for each model."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 122,
+      "type": "Note",
+      "pos": [
+        1016.081298828125,
+        594.9484252929688
+      ],
+      "size": [
+        230,
+        146
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note: BF16 preferred",
+      "properties": {},
+      "widgets_values": [
+        "The original weights are only available in bf16, this model seem to have issues running in fp16 so if you get black output, make sure to use bf16 base_precision."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
       "id": 126,
       "type": "Note",
       "pos": [
@@ -1262,17 +1211,94 @@
         88
       ],
       "flags": {},
-      "order": 14,
+      "order": 15,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "Audio latent",
+      "title": "Note: Audio latent",
       "properties": {},
       "widgets_values": [
         "Default audio latent length is 157 for 121 frames, adjusting this is experimental!!"
       ],
       "color": "#432",
       "bgcolor": "#653"
+    },
+    {
+      "id": 88,
+      "type": "VHS_VideoCombine",
+      "pos": [
+        2376.7099609375,
+        387.7659912109375
+      ],
+      "size": [
+        903.5481567382812,
+        334
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 160
+        },
+        {
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 163
+        },
+        {
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": null
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Filenames",
+          "type": "VHS_FILENAMES",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VHS_VideoCombine",
+        "cnr_id": "comfyui-videohelpersuite",
+        "ver": "0edce8ef7ce173ac97a3ed3d6f4636029d1a4530"
+      },
+      "widgets_values": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "WanVideo_Ovi",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 20,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true,
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "filename": "WanVideo_Ovi_00027-audio.webm",
+            "subfolder": "",
+            "type": "temp",
+            "format": "video/webm",
+            "frame_rate": 24,
+            "workflow": "WanVideo_Ovi_00027.png",
+            "fullpath": "/home/kijai/AI/ComfyUI/temp/WanVideo_Ovi_00027-audio.webm"
+          }
+        }
+      }
     }
   ],
   "links": [
@@ -1481,10 +1507,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5644739300537776,
+      "scale": 0.6830134553650712,
       "offset": [
-        785.7769735686938,
-        -2.4187927272334946
+        242.97610863510013,
+        -102.33059630401593
       ]
     },
     "frontendVersion": "1.28.3",
@@ -1493,7 +1519,7 @@
     "VHS_MetadataImage": true,
     "VHS_KeepIntermediate": true,
     "node_versions": {
-      "ComfyUI-WanVideoWrapper": "586d9148a0306ef5d30e9a971a9c3be4cd3ecc97",
+      "ComfyUI-WanVideoWrapper": "da43a516839b7bc50b21f53f1c4551862c872eac",
       "ComfyUI-KJNodes": "3fcd22f2fe2be69c3229f192362b91888277cbcb",
       "comfy-core": "0.3.64",
       "comfyui-videohelpersuite": "8e4d79471bf1952154768e8435a9300077b534fa"
