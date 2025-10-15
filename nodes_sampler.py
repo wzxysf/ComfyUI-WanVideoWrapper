@@ -834,12 +834,14 @@ class WanVideoSampler:
         flashvsr_LQ_images = image_embeds.get("flashvsr_LQ_images", None)
         flashvsr_strength = image_embeds.get("flashvsr_strength", 1.0)
         if flashvsr_LQ_images is not None:
-            LQ_images = flashvsr_LQ_images.unsqueeze(0).movedim(-1, 1).to(device, dtype) * 2 - 1
+            if flashvsr_LQ_images.shape[0] < num_frames + 4:
+                missing_frames = num_frames + 4 - flashvsr_LQ_images.shape[0]
+                last_frame = flashvsr_LQ_images[-1:].repeat(missing_frames, 1, 1, 1)
+                flashvsr_LQ_images = torch.cat([flashvsr_LQ_images, last_frame], dim=0)
+            LQ_images = flashvsr_LQ_images[:num_frames+4].unsqueeze(0).movedim(-1, 1).to(device, dtype) * 2 - 1
             if context_options is None:
                 flashvsr_LQ_latent = transformer.LQ_proj_in(LQ_images)
                 log.info(f"flashvsr_LQ_latent: {flashvsr_LQ_latent[0].shape}")
-                if noise.shape[1] != 1:
-                    noise = noise[:, :-1]
                 seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
         latent = noise
