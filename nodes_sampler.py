@@ -832,12 +832,14 @@ class WanVideoSampler:
         # FlashVSR
         flashvsr_LQ_latent = LQ_images = None
         flashvsr_LQ_images = image_embeds.get("flashvsr_LQ_images", None)
+        flashvsr_strength = image_embeds.get("flashvsr_strength", 1.0)
         if flashvsr_LQ_images is not None:
             LQ_images = flashvsr_LQ_images.unsqueeze(0).movedim(-1, 1).to(device, dtype) * 2 - 1
             if context_options is None:
                 flashvsr_LQ_latent = transformer.LQ_proj_in(LQ_images)
                 log.info(f"flashvsr_LQ_latent: {flashvsr_LQ_latent[0].shape}")
-                noise = noise[:, :-1]
+                if noise.shape[1] != 1:
+                    noise = noise[:, :-1]
                 seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
         latent = noise
@@ -1346,6 +1348,7 @@ class WanVideoSampler:
                     "seq_len_ovi": seq_len_ovi, # Audio latent model sequence length for Ovi
                     "ovi_negative_text_embeds": ovi_negative_text_embeds, # Audio latent model negative text embeds for Ovi
                     "flashvsr_LQ_latent": flashvsr_LQ_latent, # FlashVSR LQ latent for upsampling
+                    "flashvsr_strength": flashvsr_strength, # FlashVSR strength
                 }
 
                 batch_size = 1
@@ -1950,7 +1953,6 @@ class WanVideoSampler:
                                 end = c[-1] * 4 + 1 + 4
                                 center_indices = torch.arange(start, end, 1)
                                 center_indices = torch.clamp(center_indices, min=0, max=LQ_images.shape[2] - 1)
-                                print("FlashVSR LQ image indices:", center_indices)
                                 partial_flashvsr_LQ_images = LQ_images[:, :, center_indices].to(device, dtype)
                                 partial_flashvsr_LQ_latent = transformer.LQ_proj_in(partial_flashvsr_LQ_images)
 

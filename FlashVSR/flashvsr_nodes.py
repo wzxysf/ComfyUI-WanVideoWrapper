@@ -12,6 +12,7 @@ class WanVideoAddFlashVSRInput:
         return {"required": {
                     "embeds": ("WANVIDIMAGE_EMBEDS",),
                     "images": ("IMAGE", {"tooltip": "Low-res video frames to enhance"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01, "tooltip": "Strength to apply the FlashVSR latent"}),
                 }
         }
 
@@ -20,9 +21,10 @@ class WanVideoAddFlashVSRInput:
     FUNCTION = "add"
     CATEGORY = "WanVideoWrapper"
 
-    def add(self, embeds, images):
+    def add(self, embeds, images, strength):
         updated = dict(embeds)
         updated["flashvsr_LQ_images"] = images
+        updated["flashvsr_strength"] = strength
         return (updated,)
 
 
