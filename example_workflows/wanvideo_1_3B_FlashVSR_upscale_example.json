@@ -875,7 +875,7 @@
         "Node name for S&R": "WanVideoExtraModelSelect"
       },
       "widgets_values": [
-        "WanVideo\\FlashVSR\\Wan2_1_FlashVSR_PQ_proj_model_bf16.safetensors"
+        "WanVideo\\FlashVSR\\Wan2_1_FlashVSR_LQ_proj_model_bf16.safetensors"
       ],
       "color": "#223",
       "bgcolor": "#335"

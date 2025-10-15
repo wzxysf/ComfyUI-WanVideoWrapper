@@ -838,9 +838,9 @@ class WanVideoSampler:
                 missing_frames = num_frames + 4 - flashvsr_LQ_images.shape[0]
                 last_frame = flashvsr_LQ_images[-1:].repeat(missing_frames, 1, 1, 1)
                 flashvsr_LQ_images = torch.cat([flashvsr_LQ_images, last_frame], dim=0)
-            LQ_images = flashvsr_LQ_images[:num_frames+4].unsqueeze(0).movedim(-1, 1).to(device, dtype) * 2 - 1
+            LQ_images = flashvsr_LQ_images[:num_frames+4].unsqueeze(0).movedim(-1, 1).to(dtype) * 2 - 1
             if context_options is None:
-                flashvsr_LQ_latent = transformer.LQ_proj_in(LQ_images)
+                flashvsr_LQ_latent = transformer.LQ_proj_in(LQ_images.to(device))
                 log.info(f"flashvsr_LQ_latent: {flashvsr_LQ_latent[0].shape}")
                 seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
@@ -1955,7 +1955,7 @@ class WanVideoSampler:
                                 end = c[-1] * 4 + 1 + 4
                                 center_indices = torch.arange(start, end, 1)
                                 center_indices = torch.clamp(center_indices, min=0, max=LQ_images.shape[2] - 1)
-                                partial_flashvsr_LQ_images = LQ_images[:, :, center_indices].to(device, dtype)
+                                partial_flashvsr_LQ_images = LQ_images[:, :, center_indices].to(device)
                                 partial_flashvsr_LQ_latent = transformer.LQ_proj_in(partial_flashvsr_LQ_images)
 
                             if len(timestep.shape) != 1:

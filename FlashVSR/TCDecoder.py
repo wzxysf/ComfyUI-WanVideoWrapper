@@ -241,7 +241,7 @@ class TAEHV(nn.Module):
         trim_flag = self.mem[-8] is None  # keeps original relative check
 
         if cond is not None:
-            shuffled = self.pixel_shuffle(cond)
+            shuffled = self.pixel_shuffle(cond.to(x))
             x = torch.cat([shuffled[:, :x.shape[1]], x], dim=2)
 
         x, self.mem = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar, mem=self.mem)
