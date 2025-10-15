@@ -829,8 +829,17 @@ class WanVideoSampler:
         if extra_channel_latents is not None:
             extra_channel_latents = extra_channel_latents[0].to(noise)
 
+        # FlashVSR
+        flashvsr_LQ_latent = None
+        flashvsr_LQ_images = image_embeds.get("flashvsr_LQ_images", None)
+        if flashvsr_LQ_images is not None:
+            LQ_images = flashvsr_LQ_images.unsqueeze(0).movedim(-1, 1).to(device, dtype) * 2 - 1
+            flashvsr_LQ_latent = transformer.LQ_proj_in(LQ_images)
+            log.info(f"flashvsr_LQ_latent: {flashvsr_LQ_latent[0].shape}")
+            noise = noise[:, :-1]
+            seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
+
         latent = noise
-        print("Latent shape:", latent.shape, "Latent dtype:", latent.dtype, "Latent device:", latent.device)
 
         #controlnet
         controlnet_latents = controlnet = None
@@ -1335,6 +1344,7 @@ class WanVideoSampler:
                     "x_ovi": [latent_model_input_ovi.to(z)] if latent_model_input_ovi is not None else None, # Audio latent model input for Ovi
                     "seq_len_ovi": seq_len_ovi, # Audio latent model sequence length for Ovi
                     "ovi_negative_text_embeds": ovi_negative_text_embeds, # Audio latent model negative text embeds for Ovi
+                    "flashvsr_LQ_latent": flashvsr_LQ_latent, # FlashVSR LQ latent for upsampling
                 }
 
                 batch_size = 1
@@ -2603,7 +2613,10 @@ class WanVideoSampler:
 
                             self.cache_state = [None, None]
 
-                            if ref_latent is not None:
+                            noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
+                            seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
+
+                            if current_ref_images is not None:
                                 if offload:
                                     offload_transformer(transformer)
                                     offloaded = True
@@ -2631,12 +2644,14 @@ class WanVideoSampler:
                                     else:
                                         temporal_ref_latents = temporal_ref_latents[:, :msk.shape[1]]
 
-                                temporal_ref_latents = torch.cat([msk, temporal_ref_latents], dim=0) # 4+C T H W
-                                image_cond_in = torch.cat([ref_latent.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
-                                del temporal_ref_latents, msk, bg_image_slice
-
-                            noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
-                            seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
+                                if ref_latent is not None:
+                                    temporal_ref_latents = torch.cat([msk, temporal_ref_latents], dim=0) # 4+C T H W
+                                    image_cond_in = torch.cat([ref_latent.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
+                                    del temporal_ref_latents, msk, bg_image_slice
+                                else:
+                                    image_cond_in = torch.cat([torch.tile(torch.zeros_like(noise[:1]), [4, 1, 1, 1]), torch.zeros_like(noise)], dim=0).to(device)
+                            else:
+                                image_cond_in = torch.cat([torch.tile(torch.zeros_like(noise[:1]), [4, 1, 1, 1]), torch.zeros_like(noise)], dim=0).to(device)
 
                             pose_input_slice = None
                             if pose_images is not None:
@@ -2978,6 +2993,7 @@ class WanVideoSampler:
             "original_image": original_image.cpu() if original_image is not None else None,
             "cache_states": cache_states,
             "latent_ovi_audio": latent_ovi.unsqueeze(0).transpose(1, 2).cpu() if latent_ovi is not None else None,
+            "flashvsr_LQ_images": LQ_images,
         },{
             "samples": callback_latent.unsqueeze(0).cpu() if callback is not None else None,
         })

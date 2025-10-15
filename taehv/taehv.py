@@ -211,7 +211,7 @@ class TAEHV(nn.Module):
         if self.patch_size > 1: x = F.pixel_unshuffle(x, self.patch_size)
         return apply_model_with_memblocks(self.encoder, x, parallel, show_progress_bar)
 
-    def decode_video(self, x, parallel=False, show_progress_bar=True):
+    def decode_video(self, x, parallel=False, show_progress_bar=True, **kwargs):
         """Decode a sequence of frames.
 
         Args:

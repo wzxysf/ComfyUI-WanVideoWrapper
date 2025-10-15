@@ -1424,6 +1424,12 @@ class WanVideoModelLoader:
             sd.update(extra_sd)
             del extra_sd
 
+        # FlashVSR
+        if "LQ_proj_in.norm1.gamma" in sd:
+            log.info("FlashVSR model detected, patching model...")
+            from .FlashVSR.LQ_proj_model import Buffer_LQ4x_Proj
+            transformer.LQ_proj_in = Buffer_LQ4x_Proj(in_dim=3, out_dim=1536, layer_num=1)
+
         # Additional cond latents
         if "add_conv_in.weight" in sd:
             def zero_module(module):

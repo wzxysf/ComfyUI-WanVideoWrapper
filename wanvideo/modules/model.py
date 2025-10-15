@@ -2153,6 +2153,7 @@ class WanModel(torch.nn.Module):
         wananim_pose_strength=1.0, wananim_face_strength=1.0,
         lynx_embeds=None,
         x_ovi=None, seq_len_ovi=None, ovi_negative_text_embeds=None,
+        flashvsr_LQ_latent=None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -2807,6 +2808,9 @@ class WanModel(torch.nn.Module):
                     lynx_ref_feature = lynx_ref_buffer.get(block_idx, None)
                 else:
                     lynx_ref_feature = None
+                # FlashVSR
+                if flashvsr_LQ_latent is not None and b < len(flashvsr_LQ_latent):
+                    x += flashvsr_LQ_latent[b].to(x)
                 # Prefetch blocks if enabled
                 if self.prefetch_blocks > 0:
                     for prefetch_offset in range(1, self.prefetch_blocks + 1):
