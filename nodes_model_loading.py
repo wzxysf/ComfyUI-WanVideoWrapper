@@ -1104,7 +1104,7 @@ class WanVideoModelLoader:
             major, minor = torch.cuda.get_device_capability(device)
             log.info(f"CUDA Compute Capability: {major}.{minor}")
             if compile_args is not None and "e4" in quantization and (major, minor) < (8, 9):
-                log.warning("WARNING: Torch.compile with fp8_e4m3fn weights on CUDA compute capability < 8.9 is not supported. Please use fp8_e5m2, GGUF or higher precision instead.")
+                log.warning("WARNING: Torch.compile with fp8_e4m3fn weights on CUDA compute capability < 8.9 may not be supported. Please use fp8_e5m2, GGUF or higher precision instead, or check the latest triton version that adds support for older architectures https://github.com/woct0rdho/triton-windows/releases/tag/v3.5.0-windows.post21")
 
         if "scaled_fp8" in sd and "scaled" not in quantization:
             raise ValueError("The model is a scaled fp8 model, please set quantization to '_scaled'")
