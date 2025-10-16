@@ -2666,14 +2666,12 @@ class WanVideoSampler:
                                     del temporal_ref_latents, msk, bg_image_slice
                                 else:
                                     image_cond_in = torch.cat([torch.tile(torch.zeros_like(noise[:1]), [4, 1, 1, 1]), torch.zeros_like(noise)], dim=0).to(device)
-                            elif ref_latent is not None:
-                                # Use ref_latent even without bg_images
-                                image_cond_in = torch.cat([ref_latent.to(device), torch.zeros_like(noise)], dim=1)
                             else:
                                 image_cond_in = torch.cat([torch.tile(torch.zeros_like(noise[:1]), [4, 1, 1, 1]), torch.zeros_like(noise)], dim=0).to(device)
 
                             pose_input_slice = None
                             if pose_images is not None:
+                                vae.to(device)
                                 pose_image_slice = pose_images_in[:, start:end].to(device)
                                 pose_input_slice = vae.encode([pose_image_slice], device,tiled=tiled_vae, pbar=False).to(dtype)
                             
