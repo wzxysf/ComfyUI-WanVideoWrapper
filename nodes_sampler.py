@@ -1411,7 +1411,7 @@ class WanVideoSampler:
 
                                 noise_pred = (noise_pred_uncond + humo_audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_humo_audio_uncond[0])
                                             + (cfg_scale - 2.0) * (noise_pred_humo_audio_uncond[0] - noise_pred_uncond))
-                                return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_humo]
+                                return noise_pred, None, [cache_state_cond, cache_state_uncond, cache_state_humo]
                             elif humo_audio_input is not None:
                                 if cache_state is not None and len(cache_state) != 4:
                                     cache_state.append(None)
@@ -1429,7 +1429,7 @@ class WanVideoSampler:
                                     + cfg_scale * (noise_pred_humo_audio[0] - noise_pred_uncond)
                                     + cfg_scale * (noise_pred_uncond - noise_pred_humo_null[0])
                                     + noise_pred_humo_null[0])
-                                return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_humo, cache_state_humo2]
+                                return noise_pred, None, [cache_state_cond, cache_state_uncond, cache_state_humo, cache_state_humo2]
 
                         #phantom
                         if use_phantom and not math.isclose(phantom_cfg_scale[idx], 1.0):
@@ -1441,7 +1441,7 @@ class WanVideoSampler:
 
                             noise_pred = (noise_pred_uncond + phantom_cfg_scale[idx] * (noise_pred_phantom[0] - noise_pred_uncond)
                                           + cfg_scale * (noise_pred_cond - noise_pred_phantom[0]))
-                            return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_phantom]
+                            return noise_pred, None,[cache_state_cond, cache_state_uncond, cache_state_phantom]
                         #audio cfg (fantasytalking and multitalk)
                         if (fantasytalking_embeds is not None or multitalk_audio_embeds is not None):
                             if not math.isclose(audio_cfg_scale[idx], 1.0):
@@ -1465,7 +1465,7 @@ class WanVideoSampler:
                                 noise_pred = (noise_pred_uncond
                                     + cfg_scale * (noise_pred_no_audio[0] - noise_pred_uncond)
                                     + audio_cfg_scale[idx] * (noise_pred_cond - noise_pred_no_audio[0]))
-                                return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_audio]
+                                return noise_pred, None,[cache_state_cond, cache_state_uncond, cache_state_audio]
                         #lynx
                         if lynx_embeds is not None and not math.isclose(lynx_cfg_scale[idx], 1.0):
                             base_params['is_uncond'] = False
@@ -1477,7 +1477,7 @@ class WanVideoSampler:
 
                             noise_pred = (noise_pred_uncond + lynx_cfg_scale[idx] * (noise_pred_lynx[0] - noise_pred_uncond)
                                           + cfg_scale * (noise_pred_cond - noise_pred_lynx[0]))
-                            return noise_pred, [cache_state_cond, cache_state_uncond, cache_state_lynx]
+                            return noise_pred, None, [cache_state_cond, cache_state_uncond, cache_state_lynx]
 
                     #batched
                     else:
