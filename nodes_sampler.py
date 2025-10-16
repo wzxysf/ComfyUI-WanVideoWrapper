@@ -2632,7 +2632,7 @@ class WanVideoSampler:
                             noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
                             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
-                            if current_ref_images is not None:
+                            if current_ref_images is not None or bg_images is not None or ref_latent is not None:
                                 if offload:
                                     offload_transformer(transformer)
                                     offloaded = True
