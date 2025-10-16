@@ -8,6 +8,15 @@ from comfy.utils import ProgressBar
 
 CACHE_T = 2
 
+# Workaround for increased memory usage in Conv3D with bfloat16 in torch 2.9.0 stable and up
+try:
+    torch_cudnn_bug = (
+        hasattr(torch.backends.cudnn, 'version') and
+        torch.backends.cudnn.version() >= 90800 and
+        torch.__version__ in ["2.9.0+cu126", "2.9.0+cu128", "2.9.0+cu130"] or torch.__version__.startswith("2.10.")
+    )
+except:
+    torch_cudnn_bug = False
 
 def check_is_instance(model, module_class):
     if isinstance(model, module_class):
@@ -35,6 +44,21 @@ class CausalConv3d(nn.Conv3d):
             x = torch.cat([cache_x, x], dim=2)
             padding[4] -= cache_x.shape[2]
         x = F.pad(x, padding)
+
+        # Convert to float32 only if this would trigger cuDNN bug
+        if (
+            torch_cudnn_bug and
+            x.dtype in (torch.bfloat16, torch.half) and
+            len(self.weight.shape) == 5 and
+            any(self.weight.shape[i] != 1 for i in range(2, 5))
+        ):
+            self.weight.data = self.weight.data.float()
+            if self.bias is not None:
+                self.bias.data = self.bias.data.float()
+            
+            result = super().forward(x.float())
+                
+            return result.to(x.dtype)
 
         return super().forward(x)
 
