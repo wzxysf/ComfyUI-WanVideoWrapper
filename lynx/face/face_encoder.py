@@ -3,6 +3,12 @@
 
 import torch
 import numpy as np
+from .arcface import Backbone
+from torch.hub import download_url_to_file, get_dir
+from urllib.parse import urlparse
+import os
+
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 __all__ = [
     "FaceEncoderArcFace",
@@ -43,8 +49,27 @@ def get_landmarks_from_image(image):
 
     return keypoints
 
-from facexlib.utils import load_file_from_url
-from facexlib.recognition.arcface_arch import Backbone
+
+def load_file_from_url(url, model_dir=None, progress=True, file_name=None, save_dir=None):
+    """Ref:https://github.com/1adrianb/face-alignment/blob/master/face_alignment/utils.py
+    """
+    if model_dir is None:
+        hub_dir = get_dir()
+        model_dir = os.path.join(hub_dir, 'checkpoints')
+
+    if save_dir is None:
+        save_dir = os.path.join(ROOT_DIR, model_dir)
+    os.makedirs(save_dir, exist_ok=True)
+
+    parts = urlparse(url)
+    filename = os.path.basename(parts.path)
+    if file_name is not None:
+        filename = file_name
+    cached_file = os.path.abspath(os.path.join(save_dir, filename))
+    if not os.path.exists(cached_file):
+        print(f'Downloading: "{url}" to {cached_file}\n')
+        download_url_to_file(url, cached_file, hash_prefix=None, progress=progress)
+    return cached_file
 
 def init_recognition_model(model_name, half=False, device='cuda', model_rootpath=None):
     print("Initializing recognition model:", model_name)
