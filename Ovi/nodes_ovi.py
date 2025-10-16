@@ -133,7 +133,7 @@ class WanVideoDecodeOviAudio:
         mmaudio_vae.to(device)
 
         waveform = mmaudio_vae.wrapped_decode(audio_latents.to(device=device, dtype=mmaudio_vae.dtype))
-        audio = {"waveform": waveform.unsqueeze(0).cpu().float(), "sample_rate": 16000}
+        audio = {"waveform": waveform.cpu().float(), "sample_rate": 16000}
 
         mmaudio_vae.to(offload_device)
         mm.soft_empty_cache()
