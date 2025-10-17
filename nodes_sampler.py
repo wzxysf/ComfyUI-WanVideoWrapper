@@ -1116,6 +1116,7 @@ class WanVideoSampler:
                              humo_image_cond=None, humo_image_cond_neg=None, humo_audio=None, humo_audio_neg=None, wananim_pose_latents=None,
                              wananim_face_pixels=None, uni3c_data=None, latent_model_input_ovi=None, flashvsr_LQ_latent=None,):
             nonlocal transformer
+            nonlocal audio_cfg_scale
 
             autocast_enabled = ("fp8" in model["quantization"] and not transformer.patched_linear)
             with torch.autocast(device_type=mm.get_autocast_device(device), dtype=dtype) if autocast_enabled else nullcontext():
