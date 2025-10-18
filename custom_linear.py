@@ -11,6 +11,7 @@ def _replace_linear(model, compute_dtype, state_dict, prefix="", patches=None, s
         return
     for name, module in model.named_children():
         module_prefix = prefix + name + "."
+        module_prefix = module_prefix.replace("_orig_mod.", "")
         _replace_linear(module, compute_dtype, state_dict, module_prefix, patches, scale_weights)
 
         if isinstance(module, nn.Linear) and "loras" not in module_prefix:
