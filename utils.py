@@ -502,12 +502,14 @@ def dict_to_device(tensor_dict, device, dtype=None):
 def compile_model(transformer, compile_args=None):
     if compile_args is None:
         return transformer
-    torch._dynamo.config.cache_size_limit = compile_args["dynamo_cache_size_limit"]
-    try:
-        if hasattr(torch, '_dynamo') and hasattr(torch._dynamo, 'config'):
+    if hasattr(torch, '_dynamo') and hasattr(torch._dynamo, 'config'):
+        torch._dynamo.config.cache_size_limit = compile_args["dynamo_cache_size_limit"]
+        torch._dynamo.config.force_parameter_static_shapes = compile_args["force_parameter_static_shapes"]
+        try:
             torch._dynamo.config.recompile_limit = compile_args["dynamo_recompile_limit"]
-    except Exception as e:
-        log.warning(f"Could not set recompile_limit: {e}")
+        except Exception as e:
+            log.warning(f"Could not set recompile_limit: {e}")
+
     if compile_args["compile_transformer_blocks_only"]:
         for i, block in enumerate(transformer.blocks):
             if hasattr(block, "_orig_mod"):

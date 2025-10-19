@@ -326,6 +326,7 @@ class WanVideoTorchCompileSettings:
             },
             "optional": {
                 "dynamo_recompile_limit": ("INT", {"default": 128, "min": 0, "max": 1024, "step": 1, "tooltip": "torch._dynamo.config.recompile_limit"}),
+                "force_parameter_static_shapes": ("BOOLEAN", {"default": True, "tooltip": "torch._dynamo.config.force_parameter_static_shapes"}),
             },
         }
     RETURN_TYPES = ("WANCOMPILEARGS",)
@@ -334,7 +335,7 @@ class WanVideoTorchCompileSettings:
     CATEGORY = "WanVideoWrapper"
     DESCRIPTION = "torch.compile settings, when connected to the model loader, torch.compile of the selected layers is attempted. Requires Triton and torch > 2.7.0 is recommended"
 
-    def set_args(self, backend, fullgraph, mode, dynamic, dynamo_cache_size_limit, compile_transformer_blocks_only, dynamo_recompile_limit=128):
+    def set_args(self, backend, fullgraph, mode, dynamic, dynamo_cache_size_limit, compile_transformer_blocks_only, dynamo_recompile_limit=128, force_parameter_static_shapes=True):
 
         compile_args = {
             "backend": backend,
@@ -344,6 +345,7 @@ class WanVideoTorchCompileSettings:
             "dynamo_cache_size_limit": dynamo_cache_size_limit,
             "dynamo_recompile_limit": dynamo_recompile_limit,
             "compile_transformer_blocks_only": compile_transformer_blocks_only,
+            "force_parameter_static_shapes": force_parameter_static_shapes,
         }
 
         return (compile_args, )
