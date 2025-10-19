@@ -1297,7 +1297,7 @@ class WanVideoSampler:
                         extra_channel_latents_input = extra_channel_latents.to(z)
                     z = torch.cat([z, extra_channel_latents_input])
 
-                if scheduler.lower() == "rcm":
+                if "rcm" in sample_scheduler.__class__.__name__.lower():
                     c_in = 1 / (torch.cos(timestep) + torch.sin(timestep))
                     c_noise = (torch.sin(timestep) / (torch.cos(timestep) + torch.sin(timestep))) * 1000
                     z = z * c_in
@@ -2962,7 +2962,7 @@ class WanVideoSampler:
                             #    callback_latent = (latent_model_input[:,:-phantom_latents.shape[1]].to(device) - noise_pred[:,:-phantom_latents.shape[1]].to(device) * t.to(device) / 1000).detach()
                             elif humo_reference_count > 0:
                                 callback_latent = (latent_model_input[:,:-humo_reference_count].to(device) - noise_pred[:,:-humo_reference_count].to(device) * t.to(device) / 1000).detach()
-                            elif scheduler == "rcm":
+                            elif "rcm" in sample_scheduler.__class__.__name__.lower():
                                 callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device)).detach()
                             else:
                                 callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach()
