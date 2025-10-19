@@ -1297,6 +1297,12 @@ class WanVideoSampler:
                         extra_channel_latents_input = extra_channel_latents.to(z)
                     z = torch.cat([z, extra_channel_latents_input])
 
+                if scheduler.lower() == "rcm":
+                    c_in = 1 / (torch.cos(timestep) + torch.sin(timestep))
+                    c_noise = (torch.sin(timestep) / (torch.cos(timestep) + torch.sin(timestep))) * 1000
+                    z = z * c_in
+                    timestep = c_noise
+
                 base_params = {
                     'x': [z], # latent
                     'y': [image_cond_input] if image_cond_input is not None else None, # image cond
@@ -2956,6 +2962,8 @@ class WanVideoSampler:
                             #    callback_latent = (latent_model_input[:,:-phantom_latents.shape[1]].to(device) - noise_pred[:,:-phantom_latents.shape[1]].to(device) * t.to(device) / 1000).detach()
                             elif humo_reference_count > 0:
                                 callback_latent = (latent_model_input[:,:-humo_reference_count].to(device) - noise_pred[:,:-humo_reference_count].to(device) * t.to(device) / 1000).detach()
+                            elif scheduler == "rcm":
+                                callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device)).detach()
                             else:
                                 callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach()
                             callback(idx, callback_latent.permute(1,0,2,3), None, len(timesteps))
