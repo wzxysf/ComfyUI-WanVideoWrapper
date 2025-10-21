@@ -119,10 +119,10 @@ class MochaEmbeds:
         gc.collect()
         vae.to(device)
 
-        input_video = input_video.to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
-        ref1 = ref1.clone().to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
+        input_video = input_video.clone()[..., :3].to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
+        ref1 = ref1.clone()[..., :3].to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
         if ref2 is not None:
-            ref2 = ref2.clone().to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
+            ref2 = ref2.clone()[..., :3].to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
 
 
         latents = vae.encode(input_video * 2.0 - 1.0, device, tiled=tiled_vae)
