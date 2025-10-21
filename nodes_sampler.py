@@ -1214,8 +1214,15 @@ class WanVideoSampler:
                 
                 if mocha_embeds is not None:
                     if context_window is not None and mocha_embeds.shape[2] != context_frames:
-                        partial_mocha_embeds = mocha_embeds[:, context_window]
-                        partial_mocha_embeds[:, -mocha_num_refs:] = mocha_embeds[:, -mocha_num_refs:]
+                        latent_frames = len(context_window)
+                        # [latent_frames, 1 mask frame, mocha_num_refs]
+                        latent_end = latent_frames
+                        mask_end = latent_end + 1
+                        partial_latents = mocha_embeds[:, :, context_window]  # windowed latents
+                        mask_frame = mocha_embeds[:, :, latent_end:mask_end]  # single mask frame
+                        ref_frames = mocha_embeds[:, :, -mocha_num_refs:]     # reference frames
+                        
+                        partial_mocha_embeds = torch.cat([partial_latents, mask_frame, ref_frames], dim=2)
                         z = torch.cat([z, partial_mocha_embeds.to(z)], dim=1)
                     else:
                         z = torch.cat([z, mocha_embeds.to(z)], dim=1)
