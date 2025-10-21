@@ -1037,8 +1037,20 @@ class WanVideoSampler:
         freqs = None
         transformer.rope_embedder.k = None
         transformer.rope_embedder.num_frames = None
-        if "default" in rope_function or bidirectional_sampling: # original RoPE
-            d = transformer.dim // transformer.num_heads
+        d = transformer.dim // transformer.num_heads
+
+        if mocha_embeds is not None:
+            from .mocha.nodes import rope_params_mocha
+            log.info(f"Using Mocha RoPE")
+            rope_function = 'mocha'
+            
+            freqs = torch.cat([
+                rope_params_mocha(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index, start=-1),
+                rope_params_mocha(1024, 2 * (d // 6), start=-1),
+                rope_params_mocha(1024, 2 * (d // 6), start=-1)
+            ],
+            dim=1)
+        elif "default" in rope_function or bidirectional_sampling: # original RoPE
             freqs = torch.cat([
                 rope_params(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index),
                 rope_params(1024, 2 * (d // 6)),
@@ -1048,18 +1060,6 @@ class WanVideoSampler:
         elif "comfy" in rope_function: # comfy's rope
             transformer.rope_embedder.k = riflex_freq_index
             transformer.rope_embedder.num_frames = latent_video_length
-
-        if mocha_embeds is not None:
-            from .mocha.nodes import rope_params_mocha
-            log.info(f"Use Mocha RoPE")
-            rope_function = 'mocha'
-            d = transformer.dim // transformer.num_heads
-            freqs = torch.cat([
-                rope_params_mocha(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index, start=-1),
-                rope_params_mocha(1024, 2 * (d // 6), start=-1),
-                rope_params_mocha(1024, 2 * (d // 6), start=-1)
-            ],
-            dim=1)
 
         transformer.rope_func = rope_function
         for block in transformer.blocks:
@@ -1215,7 +1215,7 @@ class WanVideoSampler:
                 if mocha_embeds is not None:
                     if context_window is not None and mocha_embeds.shape[2] != context_frames:
                         partial_mocha_embeds = mocha_embeds[:, context_window]
-                        partial_mocha_embeds[:, -mocha_num_refs] = mocha_embeds[:, -mocha_num_refs]
+                        partial_mocha_embeds[:, -mocha_num_refs:] = mocha_embeds[:, -mocha_num_refs:]
                         z = torch.cat([z, partial_mocha_embeds.to(z)], dim=1)
                     else:
                         z = torch.cat([z, mocha_embeds.to(z)], dim=1)
