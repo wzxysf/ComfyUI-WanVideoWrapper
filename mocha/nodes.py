@@ -1,6 +1,6 @@
 import torch
 from comfy import model_management as mm
-import os, gc, math
+import gc
 
 def rope_params_mocha(max_seq_len, dim, theta=10000, L_test=25, k=0, start=0):
     assert dim % 2 == 0
@@ -16,7 +16,6 @@ def rope_params_mocha(max_seq_len, dim, theta=10000, L_test=25, k=0, start=0):
     return freqs
 
 @torch.autocast(device_type=mm.get_autocast_device(mm.get_torch_device()), enabled=False)
-#@torch.compiler.disable()
 def rope_apply_mocha(x, grid_sizes, freqs):
     batch_size, _, n, c_doubled = x.shape
     c = c_doubled // 2
@@ -73,12 +72,7 @@ def rope_apply_mocha(x, grid_sizes, freqs):
     )
     freqs_without_bias = torch.cat([freqs_without_bias, padding], dim=0)
     
-    freqs_i = torch.where(
-        condition.unsqueeze(0).unsqueeze(0).unsqueeze(0), 
-        freqs_without_bias, 
-        freqs_with_bias
-    )
-    
+    freqs_i = torch.where(condition.unsqueeze(0).unsqueeze(0).unsqueeze(0), freqs_without_bias, freqs_with_bias)
     freqs_i = freqs_i.reshape(seq_len_tensor, 1, -1).to(x.device)
 
     x_seq = x[:, :seq_len_tensor].to(torch.float64).reshape(batch_size, seq_len_tensor, n, -1, 2)
