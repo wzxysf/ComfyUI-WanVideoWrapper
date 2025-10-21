@@ -1837,8 +1837,15 @@ class WanVideoScheduler: #WIP
                 # Annotate each sigma value
                 ax.scatter(x_values, sigmas_np, color='white', s=20, zorder=3)  # Small dots at each sigma
                 for x, y in zip(x_values, sigmas_np):
-                    if len(sigmas_np) <= 10:  # Only annotate if few steps
-                        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points", xytext=(10, 1), ha='center', color='orange', fontsize=12)
+                    # Show all annotations if few steps, or just show split step annotations
+                    show_annotation = len(sigmas_np) <= 10
+                    is_split_step = (start_idx > 0 and x == start_idx) or (end_idx != -1 and x == end_idx)
+                    
+                    if show_annotation or is_split_step:
+                        color = 'orange'
+                        if is_split_step:
+                            color = 'yellow'
+                        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points", xytext=(10, 1), ha='center', color=color, fontsize=12)
                 ax.set_xticks(x_values)
                 ax.set_title("Sigmas", color='white')           # Title font color
                 ax.set_xlabel("Step", color='white')            # X label font color
