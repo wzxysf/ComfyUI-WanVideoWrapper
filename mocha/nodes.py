@@ -167,7 +167,7 @@ class MochaEmbeds:
             "mocha_embeds": mocha_embeds,
             "num_frames": F,
             "target_shape": target_shape,
-            "num_refs": num_refs,
+            "mocha_num_refs": num_refs,
         }
         
         return (image_embeds,)
