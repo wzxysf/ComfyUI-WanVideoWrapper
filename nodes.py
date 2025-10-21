@@ -1839,7 +1839,7 @@ class WanVideoScheduler: #WIP
                 for x, y in zip(x_values, sigmas_np):
                     # Show all annotations if few steps, or just show split step annotations
                     show_annotation = len(sigmas_np) <= 10
-                    is_split_step = (start_idx > 0 and x == start_idx) or (end_idx != -1 and x == end_idx)
+                    is_split_step = (start_idx > 0 and x == start_idx) or (end_idx != -1 and x == end_idx + 1)
                     
                     if show_annotation or is_split_step:
                         color = 'orange'
