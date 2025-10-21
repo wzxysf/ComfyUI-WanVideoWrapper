@@ -283,7 +283,7 @@ class WanVideoSampler:
         else:
             cfg = [cfg] * (steps + 1)
 
-        control_latents = control_camera_latents = clip_fea = clip_fea_neg = end_image = recammaster = camera_embed = unianim_data = None
+        control_latents = control_camera_latents = clip_fea = clip_fea_neg = end_image = recammaster = camera_embed = unianim_data = mocha_embeds = None
         vace_data = vace_context = vace_scale = None
         fun_or_fl2v_model = has_ref = drop_last = False
         phantom_latents = fun_ref_image = ATI_tracks = None
@@ -415,6 +415,12 @@ class WanVideoSampler:
                 log.info(f"RecamMaster camera embed shape: {camera_embed.shape}")
                 log.info(f"RecamMaster source video shape: {recam_latents.shape}")
                 seq_len *= 2
+            
+            if image_embeds.get("mocha_embeds", None) is not None:
+                mocha_embeds = image_embeds.get("mocha_embeds", None)
+                orig_noise_len = noise.shape[1]
+                seq_len = image_embeds.get("seq_len", seq_len)
+                log.info(f"MoCha embeds shape: {mocha_embeds.shape}")
 
             # Fun control and control lora
             control_embeds = image_embeds.get("control_embeds", None)
@@ -1038,6 +1044,18 @@ class WanVideoSampler:
             transformer.rope_embedder.k = riflex_freq_index
             transformer.rope_embedder.num_frames = latent_video_length
 
+        if mocha_embeds is not None:
+            from .mocha.nodes import rope_params_mocha
+            log.info(f"Use Mocha RoPE")
+            rope_function = 'mocha'
+            d = transformer.dim // transformer.num_heads
+            freqs = torch.cat([
+                rope_params_mocha(1024, d - 4 * (d // 6), L_test=latent_video_length, k=riflex_freq_index, start=-1),
+                rope_params_mocha(1024, 2 * (d // 6), start=-1),
+                rope_params_mocha(1024, 2 * (d // 6), start=-1)
+            ],
+            dim=1)
+
         transformer.rope_func = rope_function
         for block in transformer.blocks:
             block.rope_func = rope_function
@@ -1188,6 +1206,9 @@ class WanVideoSampler:
 
                 if recammaster is not None:
                     z = torch.cat([z, recam_latents.to(z)], dim=1)
+                
+                if mocha_embeds is not None:
+                    z = torch.cat([z, mocha_embeds.to(z)], dim=1)
 
                 if mtv_input is not None:
                     if ((mtv_start_percent <= current_step_percentage <= mtv_end_percent) or \
@@ -2917,9 +2938,9 @@ class WanVideoSampler:
                             latent = torch.cat(new_latent, dim=1)
                         else:
                             latent = sample_scheduler.step(
-                                noise_pred[:, :orig_noise_len].unsqueeze(0) if recammaster is not None else noise_pred.unsqueeze(0),
+                                noise_pred[:, :orig_noise_len].unsqueeze(0) if recammaster is not None or mocha_embeds is not None else noise_pred.unsqueeze(0),
                                 timestep,
-                                latent[:, :orig_noise_len].unsqueeze(0) if recammaster is not None else latent.unsqueeze(0),
+                                latent[:, :orig_noise_len].unsqueeze(0) if recammaster is not None or mocha_embeds is not None else latent.unsqueeze(0),
                                 **scheduler_step_args)[0].squeeze(0)
                             if noise_pred_flipped is not None:
                                 latent_backwards = sample_scheduler_flipped.step(
@@ -2956,7 +2977,7 @@ class WanVideoSampler:
                             current_latent = latent.clone()
 
                         if callback is not None:
-                            if recammaster is not None:
+                            if recammaster is not None or mocha_embeds is not None:
                                 callback_latent = (latent_model_input[:, :orig_noise_len].to(device) - noise_pred[:, :orig_noise_len].to(device) * t.to(device) / 1000).detach()
                             #elif phantom_latents is not None:
                             #    callback_latent = (latent_model_input[:,:-phantom_latents.shape[1]].to(device) - noise_pred[:,:-phantom_latents.shape[1]].to(device) * t.to(device) / 1000).detach()

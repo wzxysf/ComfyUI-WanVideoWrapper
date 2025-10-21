@@ -1103,6 +1103,10 @@ class WanAttentionBlock(nn.Module):
                 q, k = apply_rope_comfy(q, k, freqs)
             elif self.rope_func == "comfy_chunked":
                 q, k = apply_rope_comfy_chunked(q, k, freqs)
+            elif self.rope_func == "mocha":
+                from ...mocha.nodes import rope_apply_mocha
+                q=rope_apply_mocha(q, grid_sizes, freqs, reverse_time=reverse_time)
+                k=rope_apply_mocha(k, grid_sizes, freqs, reverse_time=reverse_time)
             else:
                 q = rope_apply(q, grid_sizes, freqs, reverse_time=reverse_time)
                 k = rope_apply(k, grid_sizes, freqs, reverse_time=reverse_time)
