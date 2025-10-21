@@ -16,70 +16,80 @@ def rope_params_mocha(max_seq_len, dim, theta=10000, L_test=25, k=0, start=0):
     return freqs
 
 @torch.autocast(device_type=mm.get_autocast_device(mm.get_torch_device()), enabled=False)
-@torch.compiler.disable()
-def rope_apply_mocha(x, grid_sizes, freqs, reverse_time=False):
-    n, c = x.size(2), x.size(3) // 2
+#@torch.compiler.disable()
+def rope_apply_mocha(x, grid_sizes, freqs):
+    batch_size, _, n, c_doubled = x.shape
+    c = c_doubled // 2
 
-    # split freqs
     freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
 
-    # loop over samples
-    output = []
-    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
-        seq_len = f * h * w
+    f_tensor = grid_sizes[0, 0]
+    h_tensor = grid_sizes[0, 1] 
+    w_tensor = grid_sizes[0, 2]
+    
+    seq_len_tensor = f_tensor * h_tensor * w_tensor
+    sf_tensor = (f_tensor - 2) // 2
 
-        # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(
-            seq_len, n, -1, 2))
-        if reverse_time:
-            time_freqs = freqs[0][:f].view(f, 1, 1, -1)
-            time_freqs = torch.flip(time_freqs, dims=[0])
-            time_freqs = time_freqs.expand(f, h, w, -1)
-            
-            spatial_freqs = torch.cat([
-                freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-            ], dim=-1)
-            
-            freqs_i = torch.cat([time_freqs, spatial_freqs], dim=-1).reshape(seq_len, 1, -1)
-        else:
-            sf = (f - 2) // 2
-            repeat_freqs = torch.cat([
-                freqs[0][1:(1+sf)].view(sf, 1, 1, -1).expand(sf, h, w, -1),
-                freqs[1][1:(1+h)].view(1, h, 1, -1).expand(sf, h, w, -1),
-                freqs[2][1:(1+w)].view(1, 1, w, -1).expand(sf, h, w, -1)
-            ], dim=-1)
+    sf_range = torch.arange(1, sf_tensor + 1, device=freqs[0].device)
+    h_range = torch.arange(1, h_tensor + 1, device=freqs[1].device)
+    w_range = torch.arange(1, w_tensor + 1, device=freqs[2].device)
+    
+    repeat_freqs = torch.cat([
+        freqs[0][sf_range].view(sf_tensor, 1, 1, -1).expand(sf_tensor, h_tensor, w_tensor, -1),
+        freqs[1][h_range].view(1, h_tensor, 1, -1).expand(sf_tensor, h_tensor, w_tensor, -1),
+        freqs[2][w_range].view(1, 1, w_tensor, -1).expand(sf_tensor, h_tensor, w_tensor, -1)
+    ], dim=-1)
 
-            mask_freqs = torch.cat([
-                freqs[0][1].view(1, 1, 1, -1).expand(1, h, w, -1),
-                freqs[1][1:(1+h)].view(1, h, 1, -1).expand(1, h, w, -1),
-                freqs[2][1:(1+w)].view(1, 1, w, -1).expand(1, h, w, -1)
-            ], dim=-1)
+    mask_freqs = torch.cat([
+        freqs[0][1:2].view(1, 1, 1, -1).expand(1, h_tensor, w_tensor, -1),
+        freqs[1][h_range].view(1, h_tensor, 1, -1).expand(1, h_tensor, w_tensor, -1),
+        freqs[2][w_range].view(1, 1, w_tensor, -1).expand(1, h_tensor, w_tensor, -1)
+    ], dim=-1)
 
-            img_freqs = torch.cat([
-                freqs[0][0].view(1, 1, 1, -1).expand(1, h, w, -1),
-                freqs[1][1:(1+h)].view(1, h, 1, -1).expand(1, h, w, -1),
-                freqs[2][1:(1+w)].view(1, 1, w, -1).expand(1, h, w, -1)
-            ], dim=-1)
-        
-            if f == 2 * sf + 2:
-                freqs_i = torch.cat([repeat_freqs, repeat_freqs, mask_freqs, img_freqs], dim = 0).reshape(f * h * w, 1, -1).to(x.device)
-            else:
-                bias_freqs = torch.cat([
-                    freqs[0][0].view(1, 1, 1, -1).expand(1, h, w, -1),
-                    freqs[1][(h+1):(2 * h + 1)].view(1, h, 1, -1).expand(1, h, w, -1),
-                    freqs[2][(w+1):(2 * w + 1)].view(1, 1, w, -1).expand(1, h, w, -1)
-                ], dim=-1)
-                freqs_i = torch.cat([repeat_freqs, repeat_freqs, mask_freqs, img_freqs, bias_freqs], dim = 0).reshape(f * h * w, 1, -1).to(x.device)
-        
+    img_freqs = torch.cat([
+        freqs[0][0:1].view(1, 1, 1, -1).expand(1, h_tensor, w_tensor, -1),
+        freqs[1][h_range].view(1, h_tensor, 1, -1).expand(1, h_tensor, w_tensor, -1),
+        freqs[2][w_range].view(1, 1, w_tensor, -1).expand(1, h_tensor, w_tensor, -1)
+    ], dim=-1)
 
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
+    condition = (f_tensor == 2 * sf_tensor + 2)
+    
+    bias_h_range = torch.arange(h_tensor + 1, 2 * h_tensor + 1, device=freqs[1].device)
+    bias_w_range = torch.arange(w_tensor + 1, 2 * w_tensor + 1, device=freqs[2].device)
+    
+    bias_freqs = torch.cat([
+        freqs[0][0:1].view(1, 1, 1, -1).expand(1, h_tensor, w_tensor, -1),
+        freqs[1][bias_h_range].view(1, h_tensor, 1, -1).expand(1, h_tensor, w_tensor, -1),
+        freqs[2][bias_w_range].view(1, 1, w_tensor, -1).expand(1, h_tensor, w_tensor, -1)
+    ], dim=-1)
+    
+    freqs_without_bias = torch.cat([repeat_freqs, repeat_freqs, mask_freqs, img_freqs], dim=0)
+    freqs_with_bias = torch.cat([repeat_freqs, repeat_freqs, mask_freqs, img_freqs, bias_freqs], dim=0)
+    
+    pad_size = freqs_with_bias.size(0) - freqs_without_bias.size(0)
+    padding = torch.zeros(
+        pad_size, h_tensor, w_tensor, freqs_without_bias.size(-1),
+        dtype=freqs_without_bias.dtype, device=freqs_without_bias.device
+    )
+    freqs_without_bias = torch.cat([freqs_without_bias, padding], dim=0)
+    
+    freqs_i = torch.where(
+        condition.unsqueeze(0).unsqueeze(0).unsqueeze(0), 
+        freqs_without_bias, 
+        freqs_with_bias
+    )
+    
+    freqs_i = freqs_i.reshape(seq_len_tensor, 1, -1).to(x.device)
 
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).to(x.dtype)
+    x_seq = x[:, :seq_len_tensor].to(torch.float64).reshape(batch_size, seq_len_tensor, n, -1, 2)
+    x_complex = torch.view_as_complex(x_seq)
+    
+    x_rotated = torch.view_as_real(x_complex * freqs_i.unsqueeze(0)).flatten(3)
+    
+    x_remaining = x[:, seq_len_tensor:]
+    output = torch.cat([x_rotated, x_remaining], dim=1)
+    
+    return output.to(x.dtype)
 
 
 device = mm.get_torch_device()
@@ -106,6 +116,7 @@ class MochaEmbeds:
 
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Input for MoCha model: https://github.com/Orange-3DV-Team/MoCha"
 
     def process(self, vae, force_offload, input_video, mask, ref1, ref2=None, tiled_vae=False):
         W = input_video.shape[2]
@@ -116,16 +127,16 @@ class MochaEmbeds:
         lat_w = W // vae.upsampling_factor
 
         F = (F - 1) // 4 * 4 + 1
-        input_video = input_video[: F]
+        input_video = input_video.clone()[: F]
 
         mm.soft_empty_cache()
         gc.collect()
         vae.to(device)
 
         input_video = input_video.to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
-        ref1 = ref1.to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
+        ref1 = ref1.clone().to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
         if ref2 is not None:
-            ref2 = ref2.to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
+            ref2 = ref2.clone().to(device, vae.dtype).unsqueeze(0).permute(0, 4, 1, 2, 3)
 
 
         latents = vae.encode(input_video * 2.0 - 1.0, device, tiled=tiled_vae)
@@ -138,15 +149,14 @@ class MochaEmbeds:
             num_refs = 2
         
 
-        mask = torch.nn.functional.interpolate(mask.unsqueeze(1).to(vae.dtype), size=(lat_h, lat_w), mode='nearest').unsqueeze(1)
-        mask = mask.repeat(1, 16, 1, 1, 1)
-        mask = mask.to(device, vae.dtype)
+        input_latent_mask = torch.nn.functional.interpolate(mask.unsqueeze(1).to(vae.dtype), size=(lat_h, lat_w), mode='nearest').unsqueeze(1)
+        input_latent_mask = input_latent_mask.repeat(1, 16, 1, 1, 1).to(device, vae.dtype)
 
-        mask[mask <= 0.5] = 0
-        mask[mask > 0.5] = 1
-        mask[mask == 0] = -1
+        input_latent_mask[input_latent_mask <= 0.5] = 0
+        input_latent_mask[input_latent_mask > 0.5] = 1
+        input_latent_mask[input_latent_mask == 0] = -1
 
-        mocha_embeds = torch.cat([latents, mask, ref_latents], dim=2)
+        mocha_embeds = torch.cat([latents, input_latent_mask, ref_latents], dim=2)
         mocha_embeds = mocha_embeds[0]
 
         target_shape = (16, (F - 1) // 4 + 1, lat_h, lat_w)
