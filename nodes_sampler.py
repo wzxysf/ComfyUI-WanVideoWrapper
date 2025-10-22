@@ -1919,7 +1919,18 @@ class WanVideoSampler:
                                 for vace_entry in vace_data:
                                     partial_context = vace_entry["context"][0][:, c]
                                     if has_ref:
-                                        partial_context[:, 0] = vace_entry["context"][0][:, 0]
+                                        if c[0] != 0 and context_reference_latent is not None:
+                                            if context_reference_latent.shape[0] == 1: #only single extra init latent
+                                                partial_context[16:32, :1] = context_reference_latent[0, :, :1].to(intermediate_device)
+                                            elif context_reference_latent.shape[0] > 1:
+                                                num_extra_inits = context_reference_latent.shape[0]
+                                                section_size = (latent_video_length / num_extra_inits)
+                                                extra_init_index = min(int(max(c) / section_size), num_extra_inits - 1)
+                                                if context_options["verbose"]:
+                                                    log.info(f"extra init image index: {extra_init_index}")
+                                                partial_context[16:32, :1] = context_reference_latent[extra_init_index, :, :1].to(intermediate_device)
+                                        else:
+                                            partial_context[:, 0] = vace_entry["context"][0][:, 0]
 
                                     window_vace_data.append({
                                         "context": [partial_context],
