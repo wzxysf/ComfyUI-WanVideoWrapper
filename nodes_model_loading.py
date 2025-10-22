@@ -131,6 +131,7 @@ def standardize_lora_key_format(lora_sd):
         if k.startswith('vace_blocks.'):
             k = k.replace('vace_blocks.', 'diffusion_model.vace_blocks.')
         k = k.replace('.default.', '.')
+        k = k.replace('.diff_m', '.modulation.diff')
 
         # Fun LoRA format
         if k.startswith('lora_unet__'):
