@@ -505,6 +505,7 @@ def compile_model(transformer, compile_args=None):
     if hasattr(torch, '_dynamo') and hasattr(torch._dynamo, 'config'):
         torch._dynamo.config.cache_size_limit = compile_args["dynamo_cache_size_limit"]
         torch._dynamo.config.force_parameter_static_shapes = compile_args["force_parameter_static_shapes"]
+        torch._dynamo.config.allow_unspec_int_on_nn_module = True
         try:
             torch._dynamo.config.recompile_limit = compile_args["dynamo_recompile_limit"]
         except Exception as e:
