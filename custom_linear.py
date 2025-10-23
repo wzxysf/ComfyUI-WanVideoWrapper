@@ -86,6 +86,8 @@ class CustomLinear(nn.Linear):
     def forward(self, input):
         if self.bias is not None:
             bias = self.bias.to(input)
+        else:
+            bias = None
         weight = self.weight.to(input)
 
         if self.scale_weight is not None:
