@@ -1669,10 +1669,17 @@ class WanVideoVAELoader:
         if not has_model_prefix:
             vae_sd = {f"model.{k}": v for k, v in vae_sd.items()}
 
+        dim = vae_sd["model.decoder.conv1.bias"].shape[0]
+        if dim == 96:
+            log.info("Detected lightVAE model with 75% pruning")
+            pruning_rate = 0.75
+        else:
+            pruning_rate = 0.0
+
         if vae_sd["model.conv2.weight"].shape[0] == 16:
-            vae = WanVideoVAE(dtype=dtype)
+            vae = WanVideoVAE(dtype=dtype, pruning_rate=pruning_rate)
         elif vae_sd["model.conv2.weight"].shape[0] == 48:
-            vae = WanVideoVAE38(dtype=dtype)
+            vae = WanVideoVAE38(dtype=dtype, pruning_rate=pruning_rate)
 
         vae.load_state_dict(vae_sd)
         del vae_sd

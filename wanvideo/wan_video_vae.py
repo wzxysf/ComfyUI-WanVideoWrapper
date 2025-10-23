@@ -529,7 +529,8 @@ class Encoder3d(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_downsample=[True, True, False],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -540,6 +541,7 @@ class Encoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [1] + dim_mult]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0
 
         # init block
@@ -632,7 +634,8 @@ class Encoder3d_38(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_downsample=[False, True, True],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -643,6 +646,7 @@ class Encoder3d_38(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [1] + dim_mult]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0
 
         # init block
@@ -748,7 +752,8 @@ class Decoder3d(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_upsample=[False, True, True],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -759,6 +764,7 @@ class Decoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0 / 2**(len(dim_mult) - 2)
 
         # init block
@@ -854,7 +860,8 @@ class Decoder3d_38(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_upsample=[False, True, True],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -865,6 +872,7 @@ class Decoder3d_38(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
 
         # init block
         self.conv1 = CausalConv3d(z_dim, dims[0], 3, padding=1)
@@ -965,7 +973,8 @@ class VideoVAE_(nn.Module):
                  temperal_downsample=[False, True, True],
                  dropout=0.0,
                  mean=None,
-                 inv_std=None):
+                 inv_std=None,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -979,11 +988,11 @@ class VideoVAE_(nn.Module):
 
         # modules
         self.encoder = Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_downsample, dropout)
+                                 attn_scales, self.temperal_downsample, dropout, pruning_rate)
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
         self.decoder = Decoder3d(dim, z_dim, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_upsample, dropout)
+                                 attn_scales, self.temperal_upsample, dropout, pruning_rate)
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -1140,7 +1149,7 @@ class VideoVAE_(nn.Module):
 
 class WanVideoVAE(nn.Module):
 
-    def __init__(self, z_dim=16, dtype=torch.float32):
+    def __init__(self, z_dim=16, dtype=torch.float32, pruning_rate=0.0):
         super().__init__()
 
         self.dtype = dtype
@@ -1158,7 +1167,7 @@ class WanVideoVAE(nn.Module):
         self.z_dim = z_dim
 
         # init model
-        self.model = VideoVAE_(z_dim=z_dim, mean=self.mean, inv_std=self.inv_std).eval().requires_grad_(False)
+        self.model = VideoVAE_(z_dim=z_dim, mean=self.mean, inv_std=self.inv_std, pruning_rate=pruning_rate).eval().requires_grad_(False)
         self.upsampling_factor = 8
 
 
@@ -1376,7 +1385,8 @@ class VideoVAE38_(VideoVAE_):
                  dropout=0.0,
                  dtype=torch.bfloat16,
                  mean=None,
-                 inv_std=None):
+                 inv_std=None,
+                 pruning_rate=0.0):
         super(VideoVAE_, self).__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -1391,11 +1401,11 @@ class VideoVAE38_(VideoVAE_):
 
         # modules
         self.encoder = Encoder3d_38(dim, z_dim * 2, dim_mult, num_res_blocks,
-                                    attn_scales, self.temperal_downsample, dropout)
+                                    attn_scales, self.temperal_downsample, dropout, pruning_rate)
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
         self.decoder = Decoder3d_38(dec_dim, z_dim, dim_mult, num_res_blocks,
-                                    attn_scales, self.temperal_upsample, dropout)
+                                    attn_scales, self.temperal_upsample, dropout, pruning_rate)
 
 
     def encode(self, x, pbar=True, sample=False):
@@ -1453,7 +1463,7 @@ class VideoVAE38_(VideoVAE_):
 
 class WanVideoVAE38(WanVideoVAE):
 
-    def __init__(self, z_dim=48, dim=160, dtype=torch.bfloat16):
+    def __init__(self, z_dim=48, dim=160, dtype=torch.bfloat16, pruning_rate=0.0):
         super(WanVideoVAE, self).__init__()
 
         mean = [
@@ -1478,5 +1488,5 @@ class WanVideoVAE38(WanVideoVAE):
         self.z_dim = z_dim
 
         # init model
-        self.model = VideoVAE38_(z_dim=z_dim, dim=dim, dtype=dtype, mean=self.mean, inv_std=self.inv_std).eval().requires_grad_(False)
+        self.model = VideoVAE38_(z_dim=z_dim, dim=dim, dtype=dtype, mean=self.mean, inv_std=self.inv_std, pruning_rate=pruning_rate).eval().requires_grad_(False)
         self.upsampling_factor = 16
