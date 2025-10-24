@@ -1193,7 +1193,7 @@ class WanVideoVAE(nn.Module):
         return mask
 
 
-    def tiled_decode(self, hidden_states, device, tile_size, tile_stride, pbar=True):
+    def tiled_decode(self, hidden_states, device, tile_size, tile_stride, end_=False, pbar=True):
         _, _, T, H, W = hidden_states.shape
         size_h, size_w = tile_size
         stride_h, stride_w = tile_stride
@@ -1210,14 +1210,20 @@ class WanVideoVAE(nn.Module):
         data_device = "cpu"
         computation_device = device
 
-        out_T = T * 4 - 3
-        weight = torch.zeros((1, 1, out_T, H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
-        values = torch.zeros((1, 3, out_T, H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
+        weight, values = None, None
         if pbar:
             pbar = ProgressBar(len(tasks))
         for h, h_, w, w_ in tqdm(tasks, desc="VAE decoding"):
             hidden_states_batch = hidden_states[:, :, :, h:h_, w:w_].to(computation_device)
-            hidden_states_batch = self.model.decode(hidden_states_batch).to(data_device)
+            if end_:
+                hidden_states_batch = self.model.decode_2(hidden_states_batch).to(data_device)
+            else:
+                hidden_states_batch = self.model.decode(hidden_states_batch).to(data_device)
+
+            if weight is None:
+                weight = torch.zeros((1, 1, hidden_states_batch.shape[2], H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
+            if values is None:
+                values = torch.zeros((1, 3, hidden_states_batch.shape[2], H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
 
             mask = self.build_mask(
                 hidden_states_batch,
@@ -1361,7 +1367,7 @@ class WanVideoVAE(nn.Module):
         for hidden_state in hidden_states:
             hidden_state = hidden_state.unsqueeze(0)
             if tiled:
-                video = self.tiled_decode(hidden_state, device, tile_size, tile_stride, pbar=pbar)
+                video = self.tiled_decode(hidden_state, device, tile_size, tile_stride, end_=end_, pbar=pbar)
             else:
                 if end_:
                     video = self.double_decode(hidden_state, device)
