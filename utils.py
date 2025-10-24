@@ -507,7 +507,7 @@ def compile_model(transformer, compile_args=None):
         torch._dynamo.config.force_parameter_static_shapes = compile_args["force_parameter_static_shapes"]
         try:
             if hasattr(torch._dynamo.config, 'allow_unspec_int_on_nn_module'):
-                torch._dynamo.config.allow_unspec_int_on_nn_module = compile_args["allow_unspec_int_on_nn_module"]
+                torch._dynamo.config.allow_unspec_int_on_nn_module = True
         except Exception as e:
             log.warning(f"Could not set allow_unspec_int_on_nn_module: {e}")
         try:
